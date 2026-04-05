@@ -24,7 +24,7 @@ app.add_middleware(
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
 WEBAPP_URL       = os.getenv("WEBAPP_URL", "")
 STRATZ_TOKEN     = os.getenv("STRATZ_TOKEN", "")
-ANTHROPIC_API_KEY= os.getenv("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY     = os.getenv("GROQ_API_KEY", "")
 
 OPENDOTA_BASE = "https://api.opendota.com/api"
 STRATZ_GQL    = "https://api.stratz.com/graphql"
@@ -380,6 +380,13 @@ async def search_combined(query: str) -> list:
 async def root():
     return {"status": "ok", "message": "Dota 2 Analyzer API v2.1"}
 
+@app.get("/test-ai")
+async def test_ai():
+    return {
+        "groq_key_set": bool(GROQ_API_KEY),
+        "groq_key_length": len(GROQ_API_KEY) if GROQ_API_KEY else 0,
+    }
+
 @app.get("/player")
 async def find_player(query: str = Query(..., min_length=1)):
     query = query.strip()
@@ -452,8 +459,11 @@ class AIRequest(BaseModel):
 
 @app.post("/ai")
 async def ai_chat(req: AIRequest):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=503, detail="AI not configured. Set ANTHROPIC_API_KEY in Railway.")
+    if not GROQ_API_KEY:
+        logger.error("GROQ_API_KEY is not set!")
+        raise HTTPException(status_code=503, detail="AI not configured. Set GROQ_API_KEY in Railway.")
+    
+    logger.info(f"GROQ_API_KEY is set: {GROQ_API_KEY[:10]}...")
 
     system = """You are an expert Dota 2 coach and analyst.
 Analyze player statistics and give specific, actionable advice.
@@ -469,35 +479,39 @@ Keep responses under 300 words."""
         messages = [{"role": "user", "content": content}]
 
     try:
+        logger.info(f"AI request: message={req.message[:50]}... history_len={len(req.history)}")
+        
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers={
-                    "x-api-key": ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
                 },
                 json={
-                    "model": "claude-sonnet-4-20250514",
+                    "model": "llama-3.1-70b-versatile",
+                    "messages": [{"role": "system", "content": system}] + messages,
                     "max_tokens": 1000,
-                    "system": system,
-                    "messages": messages,
+                    "temperature": 0.7,
                 }
             )
         
-        # ИСПРАВЛЕНО: используем r.status_code вместо r.is_success
+        logger.info(f"Groq response status: {r.status_code}")
+        
         if r.status_code != 200:
-            logger.error(f"Anthropic error: {r.status_code} {r.text}")
-            raise HTTPException(status_code=502, detail="AI request failed")
+            error_text = r.text
+            logger.error(f"Groq error: {r.status_code} {error_text}")
+            raise HTTPException(status_code=502, detail=f"AI request failed: {error_text[:100]}")
 
         data = r.json()
-        text = "".join(c.get("text", "") for c in data.get("content", []))
+        text = data["choices"][0]["message"]["content"]
+        logger.info(f"AI response length: {len(text)}")
         return {"reply": text}
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"AI error: {e}")
+        logger.error(f"AI error: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
