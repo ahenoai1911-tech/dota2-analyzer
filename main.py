@@ -119,3 +119,31 @@ async def search(q: str = Query(..., min_length=1)):
     """Поиск игроков по нику (возвращает список)"""
     results = await search_player(q)
     return results[:5]  # Максимум 5 результатов
+
+from fastapi import Request
+import httpx
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+async def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    async with httpx.AsyncClient() as client:
+        await client.post(url, json={
+            "chat_id": chat_id,
+            "text": text
+        })
+
+
+@app.post("/webhook")
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    print(data)  # 👈 будет видно в логах
+
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+
+        await send_message(chat_id, f"echo: {text}")
+
+    return {"ok": True}
