@@ -6,6 +6,9 @@ from opendota import  get_player, get_player_wl, get_recent_matches, get_player_
 from analysis import full_analysis
 from opendota import search_player
 
+def steam64_to_account_id(steam64: int) -> int:
+    return steam64 - 76561197960265728
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,12 @@ async def find_player(query: str = Query(..., min_length=1)):
 
     # Определяем: ник или ID
     if query.isdigit():
-        player_id = int(query)
+    q_int = int(query)
+
+    if q_int > 76561197960265728:
+        player_id = steam64_to_account_id(q_int)
+    else:
+        player_id = q_int
     else:
         # Ищем по нику
         results = await search_player(query)
