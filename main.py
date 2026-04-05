@@ -484,7 +484,9 @@ Keep responses under 300 words."""
                     "messages": messages,
                 }
             )
-        if not r.is_success:
+        
+        # ИСПРАВЛЕНО: используем r.status_code вместо r.is_success
+        if r.status_code != 200:
             logger.error(f"Anthropic error: {r.status_code} {r.text}")
             raise HTTPException(status_code=502, detail="AI request failed")
 
