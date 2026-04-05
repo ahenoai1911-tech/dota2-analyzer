@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from opendota import  get_player, get_player_wl, get_recent_matches, get_player_heroes
 from analysis import full_analysis
+from opendota import search_player
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
