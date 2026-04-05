@@ -489,7 +489,7 @@ Keep responses under 300 words."""
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.1-70b-versatile",
+                    "model": "llama-3.3-70b-versatile",
                     "messages": [{"role": "system", "content": system}] + messages,
                     "max_tokens": 1000,
                     "temperature": 0.7,
