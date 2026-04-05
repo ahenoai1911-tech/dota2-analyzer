@@ -135,15 +135,52 @@ async def send_message(chat_id, text):
         })
 
 
+from fastapi import Request
+import httpx
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBAPP_URL = os.getenv("WEBAPP_URL")  # 👈 важно
+
+async def send_message(chat_id, text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    async with httpx.AsyncClient() as client:
+        await client.post(url, json=payload)
+
+
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
-    print(data)  # 👈 будет видно в логах
 
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
-        await send_message(chat_id, f"echo: {text}")
+        if text == "/start":
+            keyboard = {
+                "inline_keyboard": [[
+                    {
+                        "text": "🚀 Открыть анализатор",
+                        "web_app": {"url": WEBAPP_URL}
+                    }
+                ]]
+            }
+
+            await send_message(
+                chat_id,
+                "Добро пожаловать в Dota 2 Analyzer!",
+                reply_markup=keyboard
+            )
+
+        else:
+            await send_message(chat_id, f"echo: {text}")
 
     return {"ok": True}
