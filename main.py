@@ -421,6 +421,10 @@ async def find_player(query: str = Query(..., min_length=1)):
             raise HTTPException(status_code=404, detail="Profile not found")
         result = build_from_opendota(player, wl, matches, heroes, account_id)
 
+    # Check if profile is private (no matches and no stats)
+    if (not result.get("recent_matches") or len(result["recent_matches"]) == 0) and result["stats"]["total_matches"] <= 1:
+        raise HTTPException(status_code=403, detail="Private profile or no match data available")
+
     set_cache(cache_key, result)
     return result
 
@@ -456,6 +460,10 @@ class AIRequest(BaseModel):
     message: str
     player_context: str = ""
     history: list = []
+
+class RoastRequest(BaseModel):
+    player_context: str
+    mode: str = "toxic"  # toxic, friendly, coach, brutal
 
 @app.post("/ai")
 async def ai_chat(req: AIRequest):
@@ -512,6 +520,86 @@ Keep responses under 300 words."""
         raise
     except Exception as e:
         logger.error(f"AI error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/roast")
+async def roast_player(req: RoastRequest):
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured")
+    
+    mode_prompts = {
+        "toxic": """You are a BRUTAL, SAVAGE Dota 2 roaster. Your job is to DESTROY this player with dark humor.
+Rules:
+- Be RUTHLESSLY funny but not offensive to real people
+- Roast their stats HARD (deaths, GPM, KDA, winrate)
+- Use dark humor, sarcasm, and exaggeration
+- Format: Short punchy lines with emojis
+- Keep it under 200 words
+- Write in Russian
+- End with a devastating verdict
+
+Example style:
+💀 Ты умер 12 раз за игру. Это не KDA — это номер телефона.
+🤡 GPM 320? Даже крипы фармят быстрее.
+😂 Вердикт: Ты не проиграл — ты дал врагам шанс поверить в себя.""",
+
+        "friendly": """You are a friendly Dota 2 comedian. Roast the player gently with humor.
+- Be funny but supportive
+- Point out funny stats
+- Keep it light and fun
+- Format with emojis
+- Under 150 words
+- Write in Russian""",
+
+        "coach": """You are a Dota 2 coach who roasts with constructive feedback.
+- Point out mistakes with humor
+- Give actual advice
+- Be motivating but honest
+- Format with emojis
+- Under 200 words
+- Write in Russian""",
+
+        "brutal": """You are the MOST SAVAGE Dota 2 roaster on the planet. MAXIMUM DESTRUCTION.
+- OBLITERATE their stats
+- Use the darkest humor possible (but stay appropriate)
+- Every line should HURT
+- Format with skull emojis 💀
+- Under 250 words
+- Write in Russian
+- Make them question their life choices"""
+    }
+
+    system = mode_prompts.get(req.mode, mode_prompts["toxic"])
+    prompt = f"Roast this Dota 2 player based on their stats:\n\n{req.player_context}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": 800,
+                    "temperature": 0.9,
+                }
+            )
+        
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="AI request failed")
+
+        data = r.json()
+        text = data["choices"][0]["message"]["content"]
+        return {"roast": text}
+
+    except Exception as e:
+        logger.error(f"Roast error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
