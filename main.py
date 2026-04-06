@@ -3,6 +3,10 @@ import time
 import asyncio
 import os
 import httpx
+import sqlite3
+import json
+from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +50,95 @@ def set_cache(key: str, data):
 
 def steam64_to_account_id(steam64: int) -> int:
     return steam64 - 76561197960265728
+
+# ── DATABASE ─────────────────────────────────────────────────────────────────
+DB_PATH = "missions.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Players table
+    c.execute('''CREATE TABLE IF NOT EXISTS players (
+        account_id INTEGER PRIMARY KEY,
+        username TEXT,
+        level INTEGER DEFAULT 1,
+        xp INTEGER DEFAULT 0,
+        streak INTEGER DEFAULT 0,
+        last_mission_date TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    # Missions table
+    c.execute('''CREATE TABLE IF NOT EXISTS missions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER,
+        date TEXT,
+        mission_type TEXT,
+        target_value INTEGER,
+        current_value INTEGER DEFAULT 0,
+        completed INTEGER DEFAULT 0,
+        xp_reward INTEGER DEFAULT 25,
+        FOREIGN KEY (account_id) REFERENCES players(account_id)
+    )''')
+    
+    # Achievements table
+    c.execute('''CREATE TABLE IF NOT EXISTS achievements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER,
+        achievement_type TEXT,
+        unlocked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (account_id) REFERENCES players(account_id)
+    )''')
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_player_data(account_id: int) -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM players WHERE account_id = ?", (account_id,))
+    row = c.fetchone()
+    conn.close()
+    
+    if not row:
+        return None
+    
+    return {
+        "account_id": row[0],
+        "username": row[1],
+        "level": row[2],
+        "xp": row[3],
+        "streak": row[4],
+        "last_mission_date": row[5],
+        "created_at": row[6]
+    }
+
+def create_player(account_id: int, username: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO players (account_id, username) VALUES (?, ?)", 
+              (account_id, username))
+    conn.commit()
+    conn.close()
+
+def update_player_xp(account_id: int, xp_gain: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE players SET xp = xp + ? WHERE account_id = ?", (xp_gain, account_id))
+    
+    # Level up logic (100 XP per level)
+    c.execute("SELECT xp, level FROM players WHERE account_id = ?", (account_id,))
+    xp, level = c.fetchone()
+    new_level = xp // 100 + 1
+    if new_level > level:
+        c.execute("UPDATE players SET level = ? WHERE account_id = ?", (new_level, account_id))
+    
+    conn.commit()
+    conn.close()
+    return new_level
 
 # ── STRATZ ───────────────────────────────────────────────────────────────────
 def stratz_headers() -> dict:
@@ -601,6 +694,270 @@ Example style:
     except Exception as e:
         logger.error(f"Roast error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── MISSIONS ENDPOINTS ────────────────────────────────────────────────────────
+class MissionRequest(BaseModel):
+    account_id: int
+    username: str = ""
+
+def generate_missions(account_id: int, player_stats: dict) -> list:
+    """Generate personalized missions based on player weaknesses"""
+    stats = player_stats.get("stats", {})
+    trend = player_stats.get("trend", {})
+    recent = player_stats.get("recent_matches", [])
+    
+    missions = []
+    
+    # Analyze weaknesses
+    avg_deaths = sum(m.get("deaths", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
+    avg_gpm = sum(m.get("gpm", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
+    avg_kda = trend.get("last20_avg_kda", 0)
+    
+    # Mission 1: Deaths (if player dies too much)
+    if avg_deaths > 7:
+        missions.append({
+            "type": "deaths",
+            "description": "Умереть ≤ 5 раз",
+            "target": 5,
+            "icon": "💀"
+        })
+    elif avg_deaths > 5:
+        missions.append({
+            "type": "deaths",
+            "description": "Умереть ≤ 3 раза",
+            "target": 3,
+            "icon": "💀"
+        })
+    else:
+        missions.append({
+            "type": "deaths",
+            "description": "Сыграть без смертей",
+            "target": 0,
+            "icon": "🛡️"
+        })
+    
+    # Mission 2: GPM (if farm is low)
+    if avg_gpm < 400:
+        missions.append({
+            "type": "gpm",
+            "description": "Сделать GPM > 450",
+            "target": 450,
+            "icon": "💰"
+        })
+    elif avg_gpm < 500:
+        missions.append({
+            "type": "gpm",
+            "description": "Сделать GPM > 550",
+            "target": 550,
+            "icon": "💰"
+        })
+    else:
+        missions.append({
+            "type": "gpm",
+            "description": "Сделать GPM > 650",
+            "target": 650,
+            "icon": "💎"
+        })
+    
+    # Mission 3: KDA
+    if avg_kda < 2:
+        missions.append({
+            "type": "kda",
+            "description": "Получить KDA ≥ 3.0",
+            "target": 3,
+            "icon": "⚔️"
+        })
+    elif avg_kda < 3:
+        missions.append({
+            "type": "kda",
+            "description": "Получить KDA ≥ 4.0",
+            "target": 4,
+            "icon": "⚔️"
+        })
+    else:
+        missions.append({
+            "type": "kda",
+            "description": "Получить KDA ≥ 5.0",
+            "target": 5,
+            "icon": "🔥"
+        })
+    
+    return missions
+
+@app.post("/missions/generate")
+async def get_daily_missions(req: MissionRequest):
+    """Generate daily missions for player"""
+    account_id = req.account_id
+    username = req.username or f"Player_{account_id}"
+    
+    # Create player if not exists
+    player = get_player_data(account_id)
+    if not player:
+        create_player(account_id, username)
+        player = get_player_data(account_id)
+    
+    # Check if missions already generated today
+    today = datetime.now().strftime("%Y-%m-%d")
+    if player["last_mission_date"] == today:
+        # Return existing missions
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT mission_type, target_value, current_value, completed FROM missions WHERE account_id = ? AND date = ?", 
+                  (account_id, today))
+        rows = c.fetchall()
+        conn.close()
+        
+        if rows:
+            missions = []
+            for row in rows:
+                mission_type, target, current, completed = row
+                missions.append({
+                    "type": mission_type,
+                    "target": target,
+                    "current": current,
+                    "completed": bool(completed)
+                })
+            
+            return {
+                "account_id": account_id,
+                "date": today,
+                "missions": missions,
+                "player": player
+            }
+    
+    # Fetch player stats
+    try:
+        player_data = await find_player(str(account_id))
+    except:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    # Generate new missions
+    missions = generate_missions(account_id, player_data)
+    
+    # Save to database
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Delete old missions
+    c.execute("DELETE FROM missions WHERE account_id = ? AND date = ?", (account_id, today))
+    
+    # Insert new missions
+    for mission in missions:
+        c.execute("""INSERT INTO missions (account_id, date, mission_type, target_value, xp_reward) 
+                     VALUES (?, ?, ?, ?, ?)""",
+                  (account_id, today, mission["type"], mission["target"], 25))
+    
+    # Update last mission date
+    c.execute("UPDATE players SET last_mission_date = ? WHERE account_id = ?", (today, account_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        "account_id": account_id,
+        "date": today,
+        "missions": missions,
+        "player": player
+    }
+
+@app.post("/missions/check")
+async def check_mission_progress(req: MissionRequest):
+    """Check if player completed today's missions"""
+    account_id = req.account_id
+    
+    player = get_player_data(account_id)
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Get today's missions
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, mission_type, target_value, completed FROM missions WHERE account_id = ? AND date = ?", 
+              (account_id, today))
+    missions = c.fetchall()
+    conn.close()
+    
+    if not missions:
+        raise HTTPException(status_code=404, detail="No missions for today")
+    
+    # Fetch latest match
+    try:
+        recent_matches = await od_matches(account_id)
+        if not recent_matches or len(recent_matches) == 0:
+            return {"message": "No recent matches found"}
+        
+        latest_match = recent_matches[0]
+    except:
+        raise HTTPException(status_code=500, detail="Failed to fetch matches")
+    
+    # Check each mission
+    results = []
+    completed_count = 0
+    total_xp = 0
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    for mission_id, mission_type, target, is_completed in missions:
+        if is_completed:
+            results.append({"type": mission_type, "completed": True, "value": target})
+            completed_count += 1
+            continue
+        
+        completed = False
+        current_value = 0
+        
+        if mission_type == "deaths":
+            current_value = latest_match.get("deaths", 999)
+            completed = current_value <= target
+        elif mission_type == "gpm":
+            current_value = latest_match.get("gold_per_min", 0)
+            completed = current_value >= target
+        elif mission_type == "kda":
+            kills = latest_match.get("kills", 0)
+            deaths = max(latest_match.get("deaths", 1), 1)
+            assists = latest_match.get("assists", 0)
+            current_value = round((kills + assists) / deaths, 2)
+            completed = current_value >= target
+        
+        # Update mission
+        c.execute("UPDATE missions SET current_value = ?, completed = ? WHERE id = ?",
+                  (current_value, 1 if completed else 0, mission_id))
+        
+        results.append({
+            "type": mission_type,
+            "target": target,
+            "current": current_value,
+            "completed": completed
+        })
+        
+        if completed:
+            completed_count += 1
+            total_xp += 25
+    
+    conn.commit()
+    
+    # Update player XP and streak if all missions completed
+    if completed_count == len(missions):
+        new_level = update_player_xp(account_id, total_xp)
+        c.execute("UPDATE players SET streak = streak + 1 WHERE account_id = ?", (account_id,))
+        conn.commit()
+    else:
+        new_level = player["level"]
+    
+    conn.close()
+    
+    return {
+        "account_id": account_id,
+        "missions": results,
+        "completed": completed_count,
+        "total": len(missions),
+        "xp_gained": total_xp,
+        "new_level": new_level,
+        "match_id": latest_match.get("match_id")
+    }
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
 async def tg_send(chat_id: int, text: str, reply_markup=None, parse_mode="HTML"):
