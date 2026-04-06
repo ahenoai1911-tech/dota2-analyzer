@@ -712,75 +712,58 @@ def generate_missions(account_id: int, player_stats: dict) -> list:
     avg_deaths = sum(m.get("deaths", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
     avg_gpm = sum(m.get("gpm", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
     avg_kda = trend.get("last20_avg_kda", 0)
+    avg_networth = sum(m.get("networth", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
+    avg_healing = sum(m.get("healing", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
+    avg_denies = sum(m.get("denies", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
+    avg_tower_damage = sum(m.get("tower_damage", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
     
-    # Mission 1: Deaths (if player dies too much)
+    # Mission 1: Deaths
     if avg_deaths > 7:
-        missions.append({
-            "type": "deaths",
-            "description": "Умереть ≤ 5 раз",
-            "target": 5,
-            "icon": "💀"
-        })
+        missions.append({"type": "deaths", "description": "Умереть ≤ 5 раз", "target": 5, "icon": "💀"})
     elif avg_deaths > 5:
-        missions.append({
-            "type": "deaths",
-            "description": "Умереть ≤ 3 раза",
-            "target": 3,
-            "icon": "💀"
-        })
+        missions.append({"type": "deaths", "description": "Умереть ≤ 3 раза", "target": 3, "icon": "💀"})
     else:
-        missions.append({
-            "type": "deaths",
-            "description": "Сыграть без смертей",
-            "target": 0,
-            "icon": "🛡️"
-        })
+        missions.append({"type": "deaths", "description": "Сыграть без смертей", "target": 0, "icon": "🛡️"})
     
-    # Mission 2: GPM (if farm is low)
+    # Mission 2: GPM
     if avg_gpm < 400:
-        missions.append({
-            "type": "gpm",
-            "description": "Сделать GPM > 450",
-            "target": 450,
-            "icon": "💰"
-        })
+        missions.append({"type": "gpm", "description": "Сделать GPM > 450", "target": 450, "icon": "💰"})
     elif avg_gpm < 500:
-        missions.append({
-            "type": "gpm",
-            "description": "Сделать GPM > 550",
-            "target": 550,
-            "icon": "💰"
-        })
+        missions.append({"type": "gpm", "description": "Сделать GPM > 550", "target": 550, "icon": "💰"})
     else:
-        missions.append({
-            "type": "gpm",
-            "description": "Сделать GPM > 650",
-            "target": 650,
-            "icon": "💎"
-        })
+        missions.append({"type": "gpm", "description": "Сделать GPM > 650", "target": 650, "icon": "💎"})
     
-    # Mission 3: KDA
-    if avg_kda < 2:
-        missions.append({
-            "type": "kda",
-            "description": "Получить KDA ≥ 3.0",
-            "target": 3,
-            "icon": "⚔️"
-        })
-    elif avg_kda < 3:
-        missions.append({
-            "type": "kda",
-            "description": "Получить KDA ≥ 4.0",
-            "target": 4,
-            "icon": "⚔️"
-        })
+    # Mission 3: Networth
+    if avg_networth < 8000:
+        missions.append({"type": "networth", "description": "Нафармить NW > 10000", "target": 10000, "icon": "💵"})
+    elif avg_networth < 12000:
+        missions.append({"type": "networth", "description": "Нафармить NW > 15000", "target": 15000, "icon": "💵"})
     else:
-        missions.append({
-            "type": "kda",
-            "description": "Получить KDA ≥ 5.0",
-            "target": 5,
-            "icon": "🔥"
-        })
+        missions.append({"type": "networth", "description": "Нафармить NW > 20000", "target": 20000, "icon": "💎"})
+    
+    # Mission 4: Healing (for supports)
+    if avg_healing < 2000:
+        missions.append({"type": "healing", "description": "Залечить > 3000 HP", "target": 3000, "icon": "💚"})
+    elif avg_healing < 5000:
+        missions.append({"type": "healing", "description": "Залечить > 6000 HP", "target": 6000, "icon": "💚"})
+    else:
+        missions.append({"type": "healing", "description": "Залечить > 10000 HP", "target": 10000, "icon": "🏥"})
+    
+    # Mission 5: Denies
+    if avg_denies < 3:
+        missions.append({"type": "denies", "description": "Заденаить ≥ 5 крипов", "target": 5, "icon": "🚫"})
+    elif avg_denies < 7:
+        missions.append({"type": "denies", "description": "Заденаить ≥ 10 крипов", "target": 10, "icon": "🚫"})
+    else:
+        missions.append({"type": "denies", "description": "Заденаить ≥ 15 крипов", "target": 15, "icon": "👑"})
+    
+    # Mission 6: Tower Damage
+    if avg_tower_damage < 2000:
+        missions.append({"type": "tower_damage", "description": "Нанести урон башням > 3000", "target": 3000, "icon": "🏰"})
+    elif avg_tower_damage < 5000:
+        missions.append({"type": "tower_damage", "description": "Нанести урон башням > 6000", "target": 6000, "icon": "🏰"})
+    else:
+        missions.append({"type": "tower_damage", "description": "Нанести урон башням > 10000", "target": 10000, "icon": "🔨"})
     
     return missions
 
@@ -920,6 +903,18 @@ async def check_mission_progress(req: MissionRequest):
             deaths = max(latest_match.get("deaths", 1), 1)
             assists = latest_match.get("assists", 0)
             current_value = round((kills + assists) / deaths, 2)
+            completed = current_value >= target
+        elif mission_type == "networth":
+            current_value = latest_match.get("networth", 0)
+            completed = current_value >= target
+        elif mission_type == "healing":
+            current_value = latest_match.get("hero_healing", 0)
+            completed = current_value >= target
+        elif mission_type == "denies":
+            current_value = latest_match.get("denies", 0)
+            completed = current_value >= target
+        elif mission_type == "tower_damage":
+            current_value = latest_match.get("tower_damage", 0)
             completed = current_value >= target
         
         # Update mission
