@@ -154,7 +154,7 @@ def init_db():
     # Insert default missions if empty
     c.execute("SELECT COUNT(*) FROM missions")
     count = c.fetchone()
-    if count and count[0] == 0:
+    if count and count['count'] == 0:
         default_missions = [
             # Daily missions
             ("daily", "Первая кровь", "Получи First Blood в любом матче", "first_blood", 1, 50, 100, "🩸"),
@@ -186,7 +186,7 @@ def init_db():
     # Insert shop items if empty
     c.execute("SELECT COUNT(*) FROM shop_items")
     count = c.fetchone()
-    if count and count[0] == 0:
+    if count and count['count'] == 0:
         shop_items = [
             # Boosters
             ("XP Booster x2", "Удваивает получаемый опыт на 24 часа", "booster_xp", 500, "⚡", "duration:24,multiplier:2"),
