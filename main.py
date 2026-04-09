@@ -1,4 +1,5 @@
-﻿import logging
+# -*- coding: utf-8 -*-
+import logging
 import time
 import asyncio
 import os
