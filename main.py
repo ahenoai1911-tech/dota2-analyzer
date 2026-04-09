@@ -1211,139 +1211,250 @@ async def telegram_webhook(req: Request):
 
     chat_id = data["message"]["chat"]["id"]
     text    = data["message"].get("text", "").strip()
+    username = data["message"]["from"].get("username", "")
+
+    # Проверяем есть ли пользователь
+    user = get_or_create_user(chat_id, username)
+    
+    # Главная клавиатура (кнопки снизу)
+    def get_main_keyboard():
+        return {
+            "keyboard": [
+                ["📊 Моя статистика", "🎯 Миссии"],
+                ["🛒 Магазин", "👤 Профиль"],
+                ["⭐ Premium", "❓ Помощь"]
+            ],
+            "resize_keyboard": True,
+            "persistent": True
+        }
 
     if text == "/start":
-        # Create user profile
-        username = data["message"]["from"].get("username", "")
-        get_or_create_user(chat_id, username)
-        
-        keyboard = None
-        if WEBAPP_URL:
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🎮 Open Analyzer", "web_app": {"url": WEBAPP_URL}}],
-                    [{"text": "⭐ Premium (129 Stars)", "callback_data": "buy_premium"}]
-                ]
-            }
-        await tg_send(
-            chat_id,
-            "👋 <b>Dota 2 Analyzer</b>\n\n"
-            "Send me a nickname or Steam ID and I'll show:\n"
-            "• Rank and winrate\n"
-            "• Top heroes\n"
-            "• Recent matches\n"
-            "• Win/loss streaks\n"
-            "• KDA and GPM trends\n"
-            "• 🎯 Missions & Rewards\n"
-            "• 🛒 Shop with boosters\n\n"
-            "Or open the Web App 👇",
-            reply_markup=keyboard,
-        )
+        # Проверяем привязан ли Steam
+        if not user["steam_id"]:
+            await tg_send(
+                chat_id,
+                "👋 <b>Добро пожаловать в Dota 2 Analyzer!</b>\n\n"
+                "Для начала работы привяжите ваш Steam аккаунт.\n\n"
+                "📝 <b>Отправьте мне:</b>\n"
+                "• Ваш Steam ID (например: 105248644)\n"
+                "• Или Steam64 ID (например: 76561198065514372)\n"
+                "• Или ваш никнейм в Dota 2\n\n"
+                "После привязки вы получите доступ ко всем функциям бота!"
+            )
+        else:
+            # Уже авторизован - показываем статистику
+            await show_user_stats(chat_id, user["steam_id"])
+            await tg_send(
+                chat_id,
+                "✅ Вы уже авторизованы!\n\nИспользуйте кнопки ниже для навигации 👇",
+                reply_markup=get_main_keyboard()
+            )
 
-    elif text == "/profile":
-        user = get_or_create_user(chat_id)
-        premium = is_premium(user)
-        premium_text = f"✅ Active until {user['premium_until'][:10]}" if premium else "❌ Not active"
+    elif text == "📊 Моя статистика" or text == "/stats":
+        if not user["steam_id"]:
+            await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
+            return {"ok": True}
         
-        await tg_send(
-            chat_id,
-            f"👤 <b>Your Profile</b>\n\n"
-            f"💰 Coins: {user['coins']}/{'∞' if premium else '1000'}\n"
-            f"⭐ Level: {user['level']}\n"
-            f"📊 XP: {user['xp']}/{user['level'] * 1000}\n"
-            f"👑 Premium: {premium_text}\n\n"
-            f"Use /missions to see your tasks\n"
-            f"Use /shop to browse items"
-        )
+        await show_user_stats(chat_id, user["steam_id"])
 
-    elif text == "/missions":
-        user = get_or_create_user(chat_id)
+    elif text == "🎯 Миссии" or text == "/missions":
+        if not user["steam_id"]:
+            await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
+            return {"ok": True}
+        
+        # Назначаем миссии
         assign_daily_missions(chat_id)
         assign_weekly_missions(chat_id)
         assign_monthly_missions(chat_id)
         
         missions = get_user_missions(chat_id)
         if not missions:
-            await tg_send(chat_id, "No active missions. Check back later!")
+            await tg_send(
+                chat_id, 
+                "📭 У вас пока нет активных миссий.\n\nСыграйте несколько игр, и миссии появятся!",
+                reply_markup=get_main_keyboard()
+            )
             return {"ok": True}
         
-        msg = "🎯 <b>Your Missions</b>\n\n"
-        for m in missions:
-            status = "✅" if m["completed"] else "⏳"
-            progress = f"{m['progress']}/{m['target_value']}"
-            msg += f"{status} {m['icon']} <b>{m['title']}</b>\n"
-            msg += f"   {m['description']}\n"
-            msg += f"   Progress: {progress} | Reward: {m['reward_coins']}💰 {m['reward_xp']}⭐\n\n"
+        msg = "🎯 <b>Ваши миссии</b>\n\n"
+        
+        # Группируем по типам
+        daily = [m for m in missions if m["type"] == "daily"]
+        weekly = [m for m in missions if m["type"] == "weekly"]
+        monthly = [m for m in missions if m["type"] == "monthly"]
+        
+        if daily:
+            msg += "📅 <b>Ежедневные:</b>\n"
+            for m in daily:
+                status = "✅" if m["completed"] else "⏳"
+                progress = f"{m['progress']}/{m['target_value']}"
+                msg += f"{status} {m['icon']} {m['title']}\n"
+                msg += f"   {m['description']}\n"
+                msg += f"   Прогресс: {progress}\n"
+                msg += f"   Награда: {m['reward_coins']}💰 {m['reward_xp']}⭐\n\n"
+        
+        if weekly:
+            msg += "📆 <b>Недельные:</b>\n"
+            for m in weekly:
+                status = "✅" if m["completed"] else "⏳"
+                progress = f"{m['progress']}/{m['target_value']}"
+                msg += f"{status} {m['icon']} {m['title']}\n"
+                msg += f"   {m['description']}\n"
+                msg += f"   Прогресс: {progress}\n"
+                msg += f"   Награда: {m['reward_coins']}💰 {m['reward_xp']}⭐\n\n"
+        
+        if monthly:
+            msg += "📊 <b>Месячные:</b>\n"
+            for m in monthly:
+                status = "✅" if m["completed"] else "⏳"
+                progress = f"{m['progress']}/{m['target_value']}"
+                msg += f"{status} {m['icon']} {m['title']}\n"
+                msg += f"   {m['description']}\n"
+                msg += f"   Прогресс: {progress}\n"
+                msg += f"   Награда: {m['reward_coins']}💰 {m['reward_xp']}⭐\n\n"
         
         if not is_premium(user):
-            msg += "\n💎 <b>Premium unlocks ALL missions!</b>\n/premium for details"
+            msg += "\n💎 <b>Premium открывает ВСЕ миссии!</b>\nНажмите ⭐ Premium"
         
-        await tg_send(chat_id, msg)
+        await tg_send(chat_id, msg, reply_markup=get_main_keyboard())
 
-    elif text == "/shop":
+    elif text == "🛒 Магазин" or text == "/shop":
+        if not user["steam_id"]:
+            await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
+            return {"ok": True}
+        
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT * FROM shop_items ORDER BY type, price LIMIT 10")
+        c.execute("SELECT * FROM shop_items ORDER BY type, price LIMIT 12")
         items = c.fetchall()
         conn.close()
         
-        msg = "🛒 <b>Shop</b>\n\n"
-        for item in items:
-            msg += f"{item[5]} <b>{item[1]}</b>\n"
-            msg += f"   {item[2]}\n"
-            msg += f"   Price: {item[4]}💰\n\n"
+        msg = f"🛒 <b>Магазин</b>\n\n💰 Ваш баланс: {user['coins']} монет\n\n"
         
-        msg += "Open Web App to purchase items!"
-        await tg_send(chat_id, msg)
+        # Группируем по типам
+        boosters = [i for i in items if 'booster' in i[3]]
+        cosmetics = [i for i in items if 'cosmetic' in i[3]]
+        special = [i for i in items if 'special' in i[3]]
+        
+        if boosters:
+            msg += "⚡ <b>Бустеры:</b>\n"
+            for item in boosters:
+                msg += f"{item[5]} <b>{item[1]}</b> - {item[4]}💰\n"
+                msg += f"   {item[2]}\n\n"
+        
+        if cosmetics:
+            msg += "🎨 <b>Косметика:</b>\n"
+            for item in cosmetics:
+                msg += f"{item[5]} <b>{item[1]}</b> - {item[4]}💰\n"
+                msg += f"   {item[2]}\n\n"
+        
+        if special:
+            msg += "🎁 <b>Специальное:</b>\n"
+            for item in special:
+                msg += f"{item[5]} <b>{item[1]}</b> - {item[4]}💰\n"
+                msg += f"   {item[2]}\n\n"
+        
+        msg += "💡 Откройте Web App для покупки предметов!"
+        
+        # Добавляем кнопку Web App
+        keyboard = get_main_keyboard()
+        if WEBAPP_URL:
+            keyboard["inline_keyboard"] = [[
+                {"text": "🛒 Открыть магазин", "web_app": {"url": f"{WEBAPP_URL}?tab=shop&telegram_id={chat_id}"}}
+            ]]
+        
+        await tg_send(chat_id, msg, reply_markup=keyboard)
 
-    elif text == "/premium":
-        user = get_or_create_user(chat_id)
-        if is_premium(user):
+    elif text == "👤 Профиль" or text == "/profile":
+        if not user["steam_id"]:
+            await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
+            return {"ok": True}
+        
+        premium = is_premium(user)
+        premium_text = f"✅ Активна до {user['premium_until'][:10]}" if premium else "❌ Не активна"
+        
+        # Считаем выполненные миссии
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM user_missions WHERE telegram_id = ? AND completed = 1", (chat_id,))
+        completed_missions = c.fetchone()[0]
+        conn.close()
+        
+        msg = (
+            f"👤 <b>Ваш профиль</b>\n\n"
+            f"🆔 Steam ID: {user['steam_id']}\n"
+            f"💰 Монеты: {user['coins']}/{'∞' if premium else '1000'}\n"
+            f"⭐ Уровень: {user['level']}\n"
+            f"📊 Опыт: {user['xp']}/{user['level'] * 1000}\n"
+            f"🎯 Выполнено миссий: {completed_missions}\n"
+            f"👑 Premium: {premium_text}\n\n"
+        )
+        
+        if not premium:
+            msg += "💎 Хотите больше миссий и безлимитные монеты?\nНажмите ⭐ Premium"
+        
+        await tg_send(chat_id, msg, reply_markup=get_main_keyboard())
+
+    elif text == "⭐ Premium" or text == "/premium":
+        premium = is_premium(user)
+        if premium:
             await tg_send(
                 chat_id,
-                f"✅ You already have Premium!\n"
-                f"Active until: {user['premium_until'][:10]}"
+                f"✅ <b>У вас уже есть Premium!</b>\n\n"
+                f"Активна до: {user['premium_until'][:10]}\n\n"
+                f"Преимущества:\n"
+                f"• 🎯 Все миссии (15 вместо 3)\n"
+                f"• 💰 Безлимитные монеты\n"
+                f"• 🎁 Эксклюзивные предметы",
+                reply_markup=get_main_keyboard()
             )
         else:
             keyboard = {
                 "inline_keyboard": [[
-                    {"text": "⭐ Buy Premium (129 Stars)", "callback_data": "buy_premium"}
+                    {"text": "⭐ Купить Premium (129 Stars)", "callback_data": "buy_premium"}
                 ]]
             }
             await tg_send(
                 chat_id,
-                "💎 <b>Premium Subscription</b>\n\n"
-                "Benefits:\n"
-                "• 🎯 Access to ALL missions (daily/weekly/monthly)\n"
-                "• 💰 Unlimited coin storage\n"
-                "• 🚀 Exclusive boosters\n"
-                "• 🎁 Monthly rewards\n\n"
-                "Price: 129 Telegram Stars\n"
-                "Duration: 30 days",
+                "💎 <b>Premium подписка</b>\n\n"
+                "<b>Преимущества:</b>\n"
+                "• 🎯 Доступ ко ВСЕМ миссиям (15 вместо 3)\n"
+                "• 💰 Безлимитное хранение монет\n"
+                "• 🚀 Эксклюзивные бустеры\n"
+                "• 🎁 Ежемесячные награды\n\n"
+                "💵 Цена: 129 Telegram Stars\n"
+                "⏱ Длительность: 30 дней",
                 reply_markup=keyboard
             )
 
-    elif text == "/help":
-        await tg_send(
-            chat_id,
-            "📖 <b>Commands:</b>\n\n"
-            "/start - Start bot\n"
-            "/profile - Your profile\n"
-            "/missions - View missions\n"
-            "/shop - Browse shop\n"
-            "/premium - Premium info\n\n"
-            "<b>Search:</b>\n"
-            "• Send nickname: <code>Miracle-</code>\n"
-            "• Or Steam32 ID: <code>105248644</code>\n"
-            "• Or Steam64 ID: <code>76561198065514372</code>\n\n"
-            "Data from Stratz API (fallback to OpenDota).",
+    elif text == "❓ Помощь" or text == "/help":
+        msg = (
+            "📖 <b>Как пользоваться ботом:</b>\n\n"
+            "📊 <b>Моя статистика</b> - ваша статистика в Dota 2\n"
+            "🎯 <b>Миссии</b> - активные задания и награды\n"
+            "🛒 <b>Магазин</b> - покупка бустеров и косметики\n"
+            "👤 <b>Профиль</b> - ваш профиль и прогресс\n"
+            "⭐ <b>Premium</b> - информация о подписке\n\n"
+            "<b>Как работают миссии:</b>\n"
+            "1. Играйте в Dota 2\n"
+            "2. Бот автоматически отслеживает прогресс\n"
+            "3. Выполняйте миссии и получайте награды\n"
+            "4. Тратьте монеты в магазине\n\n"
+            "<b>Как привязать другой аккаунт:</b>\n"
+            "Отправьте новый Steam ID или никнейм"
         )
+        await tg_send(chat_id, msg, reply_markup=get_main_keyboard())
 
     elif text.startswith("/"):
-        await tg_send(chat_id, "❓ Unknown command. Use /help")
+        await tg_send(
+            chat_id, 
+            "❓ Неизвестная команда.\nИспользуйте кнопки ниже 👇",
+            reply_markup=get_main_keyboard()
+        )
 
     else:
-        await tg_send(chat_id, f"🔍 Looking up <b>{text}</b>...")
+        # Пользователь отправил текст - пытаемся найти игрока
+        await tg_send(chat_id, f"🔍 Ищу игрока <b>{text}</b>...")
         try:
             query = text
             if query.isdigit():
@@ -1352,7 +1463,11 @@ async def telegram_webhook(req: Request):
             else:
                 results = await search_combined(query)
                 if not results:
-                    await tg_send(chat_id, "❌ Player not found. Check nickname or ID.")
+                    await tg_send(
+                        chat_id, 
+                        "❌ Игрок не найден.\n\nПроверьте правильность никнейма или Steam ID.",
+                        reply_markup=get_main_keyboard()
+                    )
                     return {"ok": True}
                 account_id = results[0]["account_id"]
 
@@ -1368,33 +1483,100 @@ async def telegram_webhook(req: Request):
                         od_matches(account_id), od_heroes(account_id),
                     )
                     if not player:
-                        await tg_send(chat_id, "❌ Profile not found or private.")
+                        await tg_send(
+                            chat_id, 
+                            "❌ Профиль не найден или приватный.",
+                            reply_markup=get_main_keyboard()
+                        )
                         return {"ok": True}
                     result = build_from_opendota(player, wl, matches, heroes, account_id)
                 set_cache(f"player:{query}", result)
 
+            # Привязываем Steam аккаунт
+            link_steam_account(chat_id, account_id)
+            
+            # Обновляем прогресс миссий
+            update_mission_progress(chat_id, result)
+            
+            # Показываем статистику
             msg = format_player_message(result)
-            keyboard = None
+            
+            keyboard = get_main_keyboard()
             if WEBAPP_URL:
-                keyboard = {
-                    "inline_keyboard": [[
-                        {
-                            "text": "📊 Full Analysis",
-                            "web_app": {"url": f"{WEBAPP_URL}?player_id={account_id}&telegram_id={chat_id}"}
-                        }
-                    ]]
-                }
+                keyboard["inline_keyboard"] = [[
+                    {"text": "📊 Полный анализ", "web_app": {"url": f"{WEBAPP_URL}?player_id={account_id}&telegram_id={chat_id}"}}
+                ]]
+            
             await tg_send(chat_id, msg, reply_markup=keyboard)
             
-            # Link steam account and update missions
-            link_steam_account(chat_id, account_id)
-            update_mission_progress(chat_id, result)
+            # Если это первая привязка - показываем приветствие
+            if not user["steam_id"]:
+                await tg_send(
+                    chat_id,
+                    "✅ <b>Steam аккаунт успешно привязан!</b>\n\n"
+                    "Теперь вы можете:\n"
+                    "• Выполнять миссии и получать награды\n"
+                    "• Покупать предметы в магазине\n"
+                    "• Отслеживать свой прогресс\n\n"
+                    "Используйте кнопки ниже для навигации 👇",
+                    reply_markup=get_main_keyboard()
+                )
 
         except Exception as e:
             logger.error(f"Webhook error: {e}")
-            await tg_send(chat_id, "⚠️ Error loading data. Try again later.")
+            await tg_send(
+                chat_id, 
+                "⚠️ Ошибка при загрузке данных. Попробуйте позже.",
+                reply_markup=get_main_keyboard()
+            )
 
     return {"ok": True}
+
+# Функция для показа статистики пользователя
+async def show_user_stats(chat_id: int, steam_id: int):
+    try:
+        result = get_cache(f"player:{steam_id}")
+        if not result:
+            if STRATZ_TOKEN:
+                stratz_data = await stratz_player(steam_id)
+                if stratz_data:
+                    result = build_from_stratz(stratz_data, steam_id)
+            if not result:
+                player, wl, matches, heroes = await asyncio.gather(
+                    od_player(steam_id), od_wl(steam_id),
+                    od_matches(steam_id), od_heroes(steam_id),
+                )
+                if not player:
+                    await tg_send(chat_id, "❌ Не удалось загрузить статистику.")
+                    return
+                result = build_from_opendota(player, wl, matches, heroes, steam_id)
+            set_cache(f"player:{steam_id}", result)
+        
+        # Обновляем прогресс миссий
+        update_mission_progress(chat_id, result)
+        
+        msg = format_player_message(result)
+        
+        keyboard = {
+            "keyboard": [
+                ["📊 Моя статистика", "🎯 Миссии"],
+                ["🛒 Магазин", "👤 Профиль"],
+                ["⭐ Premium", "❓ Помощь"]
+            ],
+            "resize_keyboard": True,
+            "persistent": True
+        }
+        
+        if WEBAPP_URL:
+            keyboard["inline_keyboard"] = [[
+                {"text": "📊 Полный анализ", "web_app": {"url": f"{WEBAPP_URL}?player_id={steam_id}&telegram_id={chat_id}"}}
+            ]]
+        
+        await tg_send(chat_id, msg, reply_markup=keyboard)
+        
+    except Exception as e:
+        logger.error(f"Show stats error: {e}")
+        await tg_send(chat_id, "⚠️ Ошибка при загрузке статистики.")
 
 # ── CALLBACK QUERY HANDLER ───────────────────────────────────────────────────
 @app.post("/webhook/callback")
