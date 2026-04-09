@@ -4,7 +4,7 @@ import asyncio
 import os
 import httpx
 import sqlite3
-import json
+import random
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -28,11 +28,169 @@ app.add_middleware(
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
 WEBAPP_URL       = os.getenv("WEBAPP_URL", "")
 STRATZ_TOKEN     = os.getenv("STRATZ_TOKEN", "")
-GROQ_API_KEY     = os.getenv("GROQ_API_KEY", "")
+ANTHROPIC_API_KEY= os.getenv("ANTHROPIC_API_KEY", "")
 
 OPENDOTA_BASE = "https://api.opendota.com/api"
 STRATZ_GQL    = "https://api.stratz.com/graphql"
 STRATZ_BASE   = "https://api.stratz.com/api/v1"
+
+# ── DATABASE ─────────────────────────────────────────────────────────────────
+DB_PATH = "dota_analyzer.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Users table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            steam_id INTEGER,
+            username TEXT,
+            coins INTEGER DEFAULT 0,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            premium_until TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_seen TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Missions table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS missions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            requirement TEXT NOT NULL,
+            target_value INTEGER NOT NULL,
+            reward_coins INTEGER NOT NULL,
+            reward_xp INTEGER NOT NULL,
+            icon TEXT DEFAULT '🎯'
+        )
+    """)
+    
+    # User missions progress
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_missions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            mission_id INTEGER NOT NULL,
+            progress INTEGER DEFAULT 0,
+            completed INTEGER DEFAULT 0,
+            claimed INTEGER DEFAULT 0,
+            assigned_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id),
+            FOREIGN KEY (mission_id) REFERENCES missions(id)
+        )
+    """)
+    
+    # Shop items
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS shop_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            type TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            icon TEXT DEFAULT '🎁',
+            data TEXT
+        )
+    """)
+    
+    # User inventory
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            acquired_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id),
+            FOREIGN KEY (item_id) REFERENCES shop_items(id)
+        )
+    """)
+    
+    # Transactions log
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            description TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+        )
+    """)
+    
+    conn.commit()
+    
+    # Insert default missions if empty
+    c.execute("SELECT COUNT(*) FROM missions")
+    if c.fetchone()[0] == 0:
+        default_missions = [
+            # Daily missions
+            ("daily", "Первая кровь", "Получи First Blood в любом матче", "first_blood", 1, 50, 100, "🩸"),
+            ("daily", "Победная серия", "Выиграй 3 игры подряд", "win_streak", 3, 100, 150, "🔥"),
+            ("daily", "Мастер фарма", "Набери 600+ GPM в матче", "gpm", 600, 75, 120, "💰"),
+            ("daily", "Безупречная игра", "Сыграй матч с KDA 10+", "kda", 10, 80, 130, "⭐"),
+            ("daily", "Командный игрок", "Сделай 20+ ассистов в матче", "assists", 20, 60, 100, "🤝"),
+            
+            # Weekly missions
+            ("weekly", "Марафонец", "Сыграй 20 матчей за неделю", "matches", 20, 300, 500, "🏃"),
+            ("weekly", "Универсал", "Сыграй на 10 разных героях", "unique_heroes", 10, 250, 400, "🎭"),
+            ("weekly", "Доминатор", "Выиграй 15 игр за неделю", "wins", 15, 400, 600, "👑"),
+            ("weekly", "Разрушитель", "Нанеси 1M урона по строениям", "tower_damage", 1000000, 200, 350, "🏰"),
+            ("weekly", "Целитель", "Вылечи 50K HP союзникам", "healing", 50000, 180, 300, "💚"),
+            
+            # Monthly missions
+            ("monthly", "Легенда", "Выиграй 50 игр за месяц", "wins", 50, 1000, 2000, "🏆"),
+            ("monthly", "Мастер героя", "Сыграй 30 игр на одном герое", "hero_matches", 30, 800, 1500, "🦸"),
+            ("monthly", "Несокрушимый", "Достигни винрейта 60%+", "winrate", 60, 1200, 2500, "💎"),
+            ("monthly", "Профессионал", "Набери средний KDA 4.0+", "avg_kda", 4, 900, 1800, "🎯"),
+            ("monthly", "Богатей", "Накопи 10000 монет", "total_coins", 10000, 1500, 3000, "💸"),
+        ]
+        c.executemany("""
+            INSERT INTO missions (type, title, description, requirement, target_value, reward_coins, reward_xp, icon)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, default_missions)
+        conn.commit()
+    
+    # Insert shop items if empty
+    c.execute("SELECT COUNT(*) FROM shop_items")
+    if c.fetchone()[0] == 0:
+        shop_items = [
+            # Boosters
+            ("XP Booster x2", "Удваивает получаемый опыт на 24 часа", "booster_xp", 500, "⚡", "duration:24,multiplier:2"),
+            ("XP Booster x3", "Утраивает получаемый опыт на 12 часов", "booster_xp", 800, "⚡⚡", "duration:12,multiplier:3"),
+            ("Coin Booster x2", "Удваивает награды монет на 24 часа", "booster_coins", 600, "💰", "duration:24,multiplier:2"),
+            ("Mega Booster", "x2 XP и монеты на 48 часов", "booster_mega", 1500, "🚀", "duration:48,xp:2,coins:2"),
+            
+            # Cosmetics
+            ("Золотая рамка", "Золотая рамка для профиля", "cosmetic_frame", 300, "🖼️", "color:gold"),
+            ("Алмазная рамка", "Алмазная рамка для профиля", "cosmetic_frame", 800, "💎", "color:diamond"),
+            ("Титул: Новичок", "Отображается в профиле", "cosmetic_title", 200, "🏷️", "title:Новичок"),
+            ("Титул: Ветеран", "Отображается в профиле", "cosmetic_title", 500, "🎖️", "title:Ветеран"),
+            ("Титул: Легенда", "Отображается в профиле", "cosmetic_title", 1000, "👑", "title:Легенда"),
+            
+            # Special
+            ("Дополнительная миссия", "Открывает 1 дополнительную миссию на день", "special_mission", 400, "📋", "missions:1"),
+            ("Сброс миссий", "Обновляет все текущие миссии", "special_refresh", 300, "🔄", "refresh:all"),
+            ("AI Запросы x10", "10 дополнительных AI запросов", "special_ai", 250, "🤖", "queries:10"),
+        ]
+        c.executemany("""
+            INSERT INTO shop_items (name, description, type, price, icon, data)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, shop_items)
+        conn.commit()
+    
+    conn.close()
+
+# Initialize database on startup
+init_db()
 
 # ── CACHE ────────────────────────────────────────────────────────────────────
 cache: dict = {}
@@ -51,94 +209,323 @@ def set_cache(key: str, data):
 def steam64_to_account_id(steam64: int) -> int:
     return steam64 - 76561197960265728
 
-# ── DATABASE ─────────────────────────────────────────────────────────────────
-DB_PATH = "missions.db"
-
-def init_db():
+# ── USER MANAGEMENT ──────────────────────────────────────────────────────────
+def get_or_create_user(telegram_id: int, username: str = None, steam_id: int = None) -> dict:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    # Players table
-    c.execute('''CREATE TABLE IF NOT EXISTS players (
-        account_id INTEGER PRIMARY KEY,
-        username TEXT,
-        level INTEGER DEFAULT 1,
-        xp INTEGER DEFAULT 0,
-        streak INTEGER DEFAULT 0,
-        last_mission_date TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )''')
+    c.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+    user = c.fetchone()
     
-    # Missions table
-    c.execute('''CREATE TABLE IF NOT EXISTS missions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id INTEGER,
-        date TEXT,
-        mission_type TEXT,
-        target_value INTEGER,
-        current_value INTEGER DEFAULT 0,
-        completed INTEGER DEFAULT 0,
-        xp_reward INTEGER DEFAULT 25,
-        FOREIGN KEY (account_id) REFERENCES players(account_id)
-    )''')
+    if not user:
+        c.execute("""
+            INSERT INTO users (telegram_id, username, steam_id, coins, xp, level)
+            VALUES (?, ?, ?, 0, 0, 1)
+        """, (telegram_id, username, steam_id))
+        conn.commit()
+        c.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        user = c.fetchone()
+    else:
+        # Update last seen
+        c.execute("UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE telegram_id = ?", (telegram_id,))
+        conn.commit()
     
-    # Achievements table
-    c.execute('''CREATE TABLE IF NOT EXISTS achievements (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id INTEGER,
-        achievement_type TEXT,
-        unlocked_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (account_id) REFERENCES players(account_id)
-    )''')
-    
-    conn.commit()
     conn.close()
-
-init_db()
-
-def get_player_data(account_id: int) -> dict:
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM players WHERE account_id = ?", (account_id,))
-    row = c.fetchone()
-    conn.close()
-    
-    if not row:
-        return None
     
     return {
-        "account_id": row[0],
-        "username": row[1],
-        "level": row[2],
-        "xp": row[3],
-        "streak": row[4],
-        "last_mission_date": row[5],
-        "created_at": row[6]
+        "telegram_id": user[0],
+        "steam_id": user[1],
+        "username": user[2],
+        "coins": user[3],
+        "xp": user[4],
+        "level": user[5],
+        "premium_until": user[6],
+        "created_at": user[7],
+        "last_seen": user[8]
     }
 
-def create_player(account_id: int, username: str):
+def is_premium(user: dict) -> bool:
+    if not user.get("premium_until"):
+        return False
+    premium_until = datetime.fromisoformat(user["premium_until"])
+    return datetime.now() < premium_until
+
+def add_coins(telegram_id: int, amount: int, description: str = ""):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO players (account_id, username) VALUES (?, ?)", 
-              (account_id, username))
+    
+    # Check if user is premium
+    c.execute("SELECT coins, premium_until FROM users WHERE telegram_id = ?", (telegram_id,))
+    result = c.fetchone()
+    current_coins = result[0]
+    premium_until = result[1]
+    
+    # Check coin limit for non-premium users
+    is_premium_user = premium_until and datetime.fromisoformat(premium_until) > datetime.now()
+    if not is_premium_user and current_coins >= 1000:
+        new_coins = 1000  # Cap at 1000 for free users
+    else:
+        new_coins = current_coins + amount
+        if not is_premium_user and new_coins > 1000:
+            new_coins = 1000
+    
+    c.execute("UPDATE users SET coins = ? WHERE telegram_id = ?", (new_coins, telegram_id))
+    c.execute("""
+        INSERT INTO transactions (telegram_id, type, amount, description)
+        VALUES (?, 'earn', ?, ?)
+    """, (telegram_id, amount, description))
+    conn.commit()
+    conn.close()
+    
+    return new_coins
+
+def add_xp(telegram_id: int, amount: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("SELECT xp, level FROM users WHERE telegram_id = ?", (telegram_id,))
+    result = c.fetchone()
+    current_xp = result[0]
+    current_level = result[1]
+    
+    new_xp = current_xp + amount
+    new_level = current_level
+    
+    # Level up calculation (1000 XP per level)
+    while new_xp >= new_level * 1000:
+        new_xp -= new_level * 1000
+        new_level += 1
+        # Reward coins on level up
+        add_coins(telegram_id, new_level * 50, f"Level {new_level} reward")
+    
+    c.execute("UPDATE users SET xp = ?, level = ? WHERE telegram_id = ?", (new_xp, new_level, telegram_id))
+    conn.commit()
+    conn.close()
+    
+    return {"level": new_level, "xp": new_xp}
+
+def link_steam_account(telegram_id: int, steam_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET steam_id = ? WHERE telegram_id = ?", (steam_id, telegram_id))
     conn.commit()
     conn.close()
 
-def update_player_xp(account_id: int, xp_gain: int):
+# ── MISSIONS ─────────────────────────────────────────────────────────────────
+def assign_daily_missions(telegram_id: int):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("UPDATE players SET xp = xp + ? WHERE account_id = ?", (xp_gain, account_id))
     
-    # Level up logic (100 XP per level)
-    c.execute("SELECT xp, level FROM players WHERE account_id = ?", (account_id,))
-    xp, level = c.fetchone()
-    new_level = xp // 100 + 1
-    if new_level > level:
-        c.execute("UPDATE players SET level = ? WHERE account_id = ?", (new_level, account_id))
+    # Check if user is premium
+    c.execute("SELECT premium_until FROM users WHERE telegram_id = ?", (telegram_id,))
+    result = c.fetchone()
+    is_premium_user = result and result[0] and datetime.fromisoformat(result[0]) > datetime.now()
+    
+    # Get all daily missions
+    c.execute("SELECT id FROM missions WHERE type = 'daily'")
+    all_daily = [row[0] for row in c.fetchall()]
+    
+    # Check existing missions for today
+    c.execute("""
+        SELECT mission_id FROM user_missions 
+        WHERE telegram_id = ? AND DATE(assigned_at) = DATE('now')
+    """, (telegram_id,))
+    existing = [row[0] for row in c.fetchall()]
+    
+    if existing:
+        conn.close()
+        return  # Already assigned today
+    
+    # Assign missions
+    num_missions = len(all_daily) if is_premium_user else 1
+    selected = random.sample(all_daily, min(num_missions, len(all_daily)))
+    
+    for mission_id in selected:
+        c.execute("""
+            INSERT INTO user_missions (telegram_id, mission_id, progress, completed, claimed)
+            VALUES (?, ?, 0, 0, 0)
+        """, (telegram_id, mission_id))
     
     conn.commit()
     conn.close()
-    return new_level
+
+def assign_weekly_missions(telegram_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("SELECT premium_until FROM users WHERE telegram_id = ?", (telegram_id,))
+    result = c.fetchone()
+    is_premium_user = result and result[0] and datetime.fromisoformat(result[0]) > datetime.now()
+    
+    c.execute("SELECT id FROM missions WHERE type = 'weekly'")
+    all_weekly = [row[0] for row in c.fetchall()]
+    
+    # Check if already assigned this week
+    c.execute("""
+        SELECT mission_id FROM user_missions 
+        WHERE telegram_id = ? AND DATE(assigned_at) >= DATE('now', '-7 days')
+        AND mission_id IN (SELECT id FROM missions WHERE type = 'weekly')
+    """, (telegram_id,))
+    existing = [row[0] for row in c.fetchall()]
+    
+    if existing:
+        conn.close()
+        return
+    
+    num_missions = len(all_weekly) if is_premium_user else 1
+    selected = random.sample(all_weekly, min(num_missions, len(all_weekly)))
+    
+    for mission_id in selected:
+        c.execute("""
+            INSERT INTO user_missions (telegram_id, mission_id, progress, completed, claimed)
+            VALUES (?, ?, 0, 0, 0)
+        """, (telegram_id, mission_id))
+    
+    conn.commit()
+    conn.close()
+
+def assign_monthly_missions(telegram_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("SELECT premium_until FROM users WHERE telegram_id = ?", (telegram_id,))
+    result = c.fetchone()
+    is_premium_user = result and result[0] and datetime.fromisoformat(result[0]) > datetime.now()
+    
+    c.execute("SELECT id FROM missions WHERE type = 'monthly'")
+    all_monthly = [row[0] for row in c.fetchall()]
+    
+    c.execute("""
+        SELECT mission_id FROM user_missions 
+        WHERE telegram_id = ? AND DATE(assigned_at) >= DATE('now', '-30 days')
+        AND mission_id IN (SELECT id FROM missions WHERE type = 'monthly')
+    """, (telegram_id,))
+    existing = [row[0] for row in c.fetchall()]
+    
+    if existing:
+        conn.close()
+        return
+    
+    num_missions = len(all_monthly) if is_premium_user else 1
+    selected = random.sample(all_monthly, min(num_missions, len(all_monthly)))
+    
+    for mission_id in selected:
+        c.execute("""
+            INSERT INTO user_missions (telegram_id, mission_id, progress, completed, claimed)
+            VALUES (?, ?, 0, 0, 0)
+        """, (telegram_id, mission_id))
+    
+    conn.commit()
+    conn.close()
+
+def get_user_missions(telegram_id: int) -> list:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("""
+        SELECT um.id, m.type, m.title, m.description, m.requirement, m.target_value,
+               m.reward_coins, m.reward_xp, m.icon, um.progress, um.completed, um.claimed
+        FROM user_missions um
+        JOIN missions m ON um.mission_id = m.id
+        WHERE um.telegram_id = ? AND um.claimed = 0
+        ORDER BY um.completed DESC, m.type, um.assigned_at
+    """, (telegram_id,))
+    
+    missions = []
+    for row in c.fetchall():
+        missions.append({
+            "id": row[0],
+            "type": row[1],
+            "title": row[2],
+            "description": row[3],
+            "requirement": row[4],
+            "target_value": row[5],
+            "reward_coins": row[6],
+            "reward_xp": row[7],
+            "icon": row[8],
+            "progress": row[9],
+            "completed": row[10],
+            "claimed": row[11]
+        })
+    
+    conn.close()
+    return missions
+
+def update_mission_progress(telegram_id: int, player_data: dict):
+    """Update mission progress based on player stats"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get active missions
+    missions = get_user_missions(telegram_id)
+    
+    for mission in missions:
+        if mission["completed"]:
+            continue
+        
+        req = mission["requirement"]
+        target = mission["target_value"]
+        current_progress = mission["progress"]
+        
+        # Calculate progress based on requirement type
+        new_progress = current_progress
+        
+        if req == "wins":
+            new_progress = player_data.get("stats", {}).get("wins", 0)
+        elif req == "matches":
+            new_progress = player_data.get("stats", {}).get("total_matches", 0)
+        elif req == "winrate":
+            new_progress = int(player_data.get("stats", {}).get("winrate", 0))
+        elif req == "avg_kda":
+            trend = player_data.get("trend", {})
+            new_progress = int(trend.get("last20_avg_kda", 0) * 10)  # Store as int
+        
+        # Check if completed
+        if new_progress >= target:
+            c.execute("""
+                UPDATE user_missions 
+                SET progress = ?, completed = 1, completed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (new_progress, mission["id"]))
+        else:
+            c.execute("UPDATE user_missions SET progress = ? WHERE id = ?", (new_progress, mission["id"]))
+    
+    conn.commit()
+    conn.close()
+
+def claim_mission_reward(telegram_id: int, mission_id: int) -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("""
+        SELECT um.completed, m.reward_coins, m.reward_xp
+        FROM user_missions um
+        JOIN missions m ON um.mission_id = m.id
+        WHERE um.id = ? AND um.telegram_id = ? AND um.claimed = 0
+    """, (mission_id, telegram_id))
+    
+    result = c.fetchone()
+    if not result or not result[0]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Mission not completed or already claimed")
+    
+    reward_coins = result[1]
+    reward_xp = result[2]
+    
+    # Mark as claimed
+    c.execute("UPDATE user_missions SET claimed = 1 WHERE id = ?", (mission_id,))
+    conn.commit()
+    conn.close()
+    
+    # Add rewards
+    add_coins(telegram_id, reward_coins, "Mission reward")
+    xp_result = add_xp(telegram_id, reward_xp)
+    
+    return {
+        "coins": reward_coins,
+        "xp": reward_xp,
+        "new_level": xp_result["level"]
+    }
 
 # ── STRATZ ───────────────────────────────────────────────────────────────────
 def stratz_headers() -> dict:
@@ -473,12 +860,179 @@ async def search_combined(query: str) -> list:
 async def root():
     return {"status": "ok", "message": "Dota 2 Analyzer API v2.1"}
 
-@app.get("/test-ai")
-async def test_ai():
+# ── USER ENDPOINTS ───────────────────────────────────────────────────────────
+@app.get("/user/profile")
+async def get_user_profile(telegram_id: int = Query(...)):
+    user = get_or_create_user(telegram_id)
     return {
-        "groq_key_set": bool(GROQ_API_KEY),
-        "groq_key_length": len(GROQ_API_KEY) if GROQ_API_KEY else 0,
+        "user": user,
+        "is_premium": is_premium(user),
+        "coin_limit": None if is_premium(user) else 1000
     }
+
+@app.post("/user/link_steam")
+async def link_steam(telegram_id: int, steam_id: int):
+    link_steam_account(telegram_id, steam_id)
+    return {"status": "ok", "message": "Steam account linked"}
+
+@app.post("/user/subscribe")
+async def subscribe_premium(telegram_id: int, stars_paid: int):
+    """Handle Telegram Stars payment for premium subscription"""
+    if stars_paid < 129:
+        raise HTTPException(status_code=400, detail="Insufficient Stars payment")
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Add 30 days of premium
+    c.execute("SELECT premium_until FROM users WHERE telegram_id = ?", (telegram_id,))
+    result = c.fetchone()
+    
+    if result and result[0]:
+        current_premium = datetime.fromisoformat(result[0])
+        if current_premium > datetime.now():
+            new_premium = current_premium + timedelta(days=30)
+        else:
+            new_premium = datetime.now() + timedelta(days=30)
+    else:
+        new_premium = datetime.now() + timedelta(days=30)
+    
+    c.execute("UPDATE users SET premium_until = ? WHERE telegram_id = ?", 
+              (new_premium.isoformat(), telegram_id))
+    conn.commit()
+    conn.close()
+    
+    return {
+        "status": "ok",
+        "premium_until": new_premium.isoformat(),
+        "message": "Premium activated for 30 days"
+    }
+
+# ── MISSIONS ENDPOINTS ───────────────────────────────────────────────────────
+@app.get("/missions")
+async def get_missions(telegram_id: int = Query(...)):
+    # Ensure user exists
+    get_or_create_user(telegram_id)
+    
+    # Assign missions if needed
+    assign_daily_missions(telegram_id)
+    assign_weekly_missions(telegram_id)
+    assign_monthly_missions(telegram_id)
+    
+    missions = get_user_missions(telegram_id)
+    return {"missions": missions}
+
+@app.post("/missions/claim")
+async def claim_mission(telegram_id: int, mission_id: int):
+    reward = claim_mission_reward(telegram_id, mission_id)
+    user = get_or_create_user(telegram_id)
+    return {
+        "status": "ok",
+        "reward": reward,
+        "user": user
+    }
+
+@app.post("/missions/update")
+async def update_missions(telegram_id: int, player_data: dict):
+    """Update mission progress based on player stats"""
+    update_mission_progress(telegram_id, player_data)
+    missions = get_user_missions(telegram_id)
+    return {"missions": missions}
+
+# ── SHOP ENDPOINTS ───────────────────────────────────────────────────────────
+@app.get("/shop")
+async def get_shop():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("SELECT * FROM shop_items ORDER BY type, price")
+    items = []
+    for row in c.fetchall():
+        items.append({
+            "id": row[0],
+            "name": row[1],
+            "description": row[2],
+            "type": row[3],
+            "price": row[4],
+            "icon": row[5],
+            "data": row[6]
+        })
+    
+    conn.close()
+    return {"items": items}
+
+@app.post("/shop/buy")
+async def buy_item(telegram_id: int, item_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get item
+    c.execute("SELECT name, price, type FROM shop_items WHERE id = ?", (item_id,))
+    item = c.fetchone()
+    if not item:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Item not found")
+    
+    item_name, price, item_type = item
+    
+    # Get user coins
+    c.execute("SELECT coins FROM users WHERE telegram_id = ?", (telegram_id,))
+    user = c.fetchone()
+    if not user or user[0] < price:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Insufficient coins")
+    
+    # Deduct coins
+    new_coins = user[0] - price
+    c.execute("UPDATE users SET coins = ? WHERE telegram_id = ?", (new_coins, telegram_id))
+    
+    # Add to inventory
+    c.execute("""
+        INSERT INTO user_inventory (telegram_id, item_id, quantity)
+        VALUES (?, ?, 1)
+        ON CONFLICT(telegram_id, item_id) DO UPDATE SET quantity = quantity + 1
+    """, (telegram_id, item_id))
+    
+    # Log transaction
+    c.execute("""
+        INSERT INTO transactions (telegram_id, type, amount, description)
+        VALUES (?, 'spend', ?, ?)
+    """, (telegram_id, -price, f"Bought {item_name}"))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        "status": "ok",
+        "item": item_name,
+        "coins_left": new_coins
+    }
+
+@app.get("/shop/inventory")
+async def get_inventory(telegram_id: int = Query(...)):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("""
+        SELECT si.name, si.type, si.icon, ui.quantity, ui.acquired_at
+        FROM user_inventory ui
+        JOIN shop_items si ON ui.item_id = si.id
+        WHERE ui.telegram_id = ?
+        ORDER BY ui.acquired_at DESC
+    """, (telegram_id,))
+    
+    inventory = []
+    for row in c.fetchall():
+        inventory.append({
+            "name": row[0],
+            "type": row[1],
+            "icon": row[2],
+            "quantity": row[3],
+            "acquired_at": row[4]
+        })
+    
+    conn.close()
+    return {"inventory": inventory}
 
 @app.get("/player")
 async def find_player(query: str = Query(..., min_length=1)):
@@ -513,10 +1067,6 @@ async def find_player(query: str = Query(..., min_length=1)):
         if not player:
             raise HTTPException(status_code=404, detail="Profile not found")
         result = build_from_opendota(player, wl, matches, heroes, account_id)
-
-    # Check if profile is private (no matches and no stats)
-    if (not result.get("recent_matches") or len(result["recent_matches"]) == 0) and result["stats"]["total_matches"] <= 1:
-        raise HTTPException(status_code=403, detail="Private profile or no match data available")
 
     set_cache(cache_key, result)
     return result
@@ -554,17 +1104,10 @@ class AIRequest(BaseModel):
     player_context: str = ""
     history: list = []
 
-class RoastRequest(BaseModel):
-    player_context: str
-    mode: str = "toxic"  # toxic, friendly, coach, brutal
-
 @app.post("/ai")
 async def ai_chat(req: AIRequest):
-    if not GROQ_API_KEY:
-        logger.error("GROQ_API_KEY is not set!")
-        raise HTTPException(status_code=503, detail="AI not configured. Set GROQ_API_KEY in Railway.")
-    
-    logger.info(f"GROQ_API_KEY is set: {GROQ_API_KEY[:10]}...")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured. Set ANTHROPIC_API_KEY in Railway.")
 
     system = """You are an expert Dota 2 coach and analyst.
 Analyze player statistics and give specific, actionable advice.
@@ -580,379 +1123,34 @@ Keep responses under 300 words."""
         messages = [{"role": "user", "content": content}]
 
     try:
-        logger.info(f"AI request: message={req.message[:50]}... history_len={len(req.history)}")
-        
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                "https://api.anthropic.com/v1/messages",
                 headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
                 },
                 json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [{"role": "system", "content": system}] + messages,
+                    "model": "claude-sonnet-4-20250514",
                     "max_tokens": 1000,
-                    "temperature": 0.7,
+                    "system": system,
+                    "messages": messages,
                 }
             )
-        
-        logger.info(f"Groq response status: {r.status_code}")
-        
-        if r.status_code != 200:
-            error_text = r.text
-            logger.error(f"Groq error: {r.status_code} {error_text}")
-            raise HTTPException(status_code=502, detail=f"AI request failed: {error_text[:100]}")
+        if not r.is_success:
+            logger.error(f"Anthropic error: {r.status_code} {r.text}")
+            raise HTTPException(status_code=502, detail="AI request failed")
 
         data = r.json()
-        text = data["choices"][0]["message"]["content"]
-        logger.info(f"AI response length: {len(text)}")
+        text = "".join(c.get("text", "") for c in data.get("content", []))
         return {"reply": text}
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"AI error: {type(e).__name__}: {e}")
+        logger.error(f"AI error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/roast")
-async def roast_player(req: RoastRequest):
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=503, detail="AI not configured")
-    
-    mode_prompts = {
-        "toxic": """You are a BRUTAL, SAVAGE Dota 2 roaster. Your job is to DESTROY this player with dark humor.
-Rules:
-- Be RUTHLESSLY funny but not offensive to real people
-- Roast their stats HARD (deaths, GPM, KDA, winrate)
-- Use dark humor, sarcasm, and exaggeration
-- Format: Short punchy lines with emojis
-- Keep it under 200 words
-- Write in Russian
-- End with a devastating verdict
-
-Example style:
-💀 Ты умер 12 раз за игру. Это не KDA — это номер телефона.
-🤡 GPM 320? Даже крипы фармят быстрее.
-😂 Вердикт: Ты не проиграл — ты дал врагам шанс поверить в себя.""",
-
-        "friendly": """You are a friendly Dota 2 comedian. Roast the player gently with humor.
-- Be funny but supportive
-- Point out funny stats
-- Keep it light and fun
-- Format with emojis
-- Under 150 words
-- Write in Russian""",
-
-        "coach": """You are a Dota 2 coach who roasts with constructive feedback.
-- Point out mistakes with humor
-- Give actual advice
-- Be motivating but honest
-- Format with emojis
-- Under 200 words
-- Write in Russian""",
-
-        "brutal": """You are the MOST SAVAGE Dota 2 roaster on the planet. MAXIMUM DESTRUCTION.
-- OBLITERATE their stats
-- Use the darkest humor possible (but stay appropriate)
-- Every line should HURT
-- Format with skull emojis 💀
-- Under 250 words
-- Write in Russian
-- Make them question their life choices"""
-    }
-
-    system = mode_prompts.get(req.mode, mode_prompts["toxic"])
-    prompt = f"Roast this Dota 2 player based on their stats:\n\n{req.player_context}"
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "max_tokens": 800,
-                    "temperature": 0.9,
-                }
-            )
-        
-        if r.status_code != 200:
-            raise HTTPException(status_code=502, detail="AI request failed")
-
-        data = r.json()
-        text = data["choices"][0]["message"]["content"]
-        return {"roast": text}
-
-    except Exception as e:
-        logger.error(f"Roast error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ── MISSIONS ENDPOINTS ────────────────────────────────────────────────────────
-class MissionRequest(BaseModel):
-    account_id: int
-    username: str = ""
-
-def generate_missions(account_id: int, player_stats: dict) -> list:
-    """Generate personalized missions based on player weaknesses"""
-    stats = player_stats.get("stats", {})
-    trend = player_stats.get("trend", {})
-    recent = player_stats.get("recent_matches", [])
-    
-    missions = []
-    
-    # Analyze weaknesses
-    avg_deaths = sum(m.get("deaths", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_gpm = sum(m.get("gpm", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_kda = trend.get("last20_avg_kda", 0)
-    avg_networth = sum(m.get("networth", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_healing = sum(m.get("healing", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_denies = sum(m.get("denies", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_tower_damage = sum(m.get("tower_damage", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    
-    # Mission 1: Deaths
-    if avg_deaths > 7:
-        missions.append({"type": "deaths", "description": "Умереть ≤ 5 раз", "target": 5, "icon": "💀"})
-    elif avg_deaths > 5:
-        missions.append({"type": "deaths", "description": "Умереть ≤ 3 раза", "target": 3, "icon": "💀"})
-    else:
-        missions.append({"type": "deaths", "description": "Сыграть без смертей", "target": 0, "icon": "🛡️"})
-    
-    # Mission 2: GPM
-    if avg_gpm < 400:
-        missions.append({"type": "gpm", "description": "Сделать GPM > 450", "target": 450, "icon": "💰"})
-    elif avg_gpm < 500:
-        missions.append({"type": "gpm", "description": "Сделать GPM > 550", "target": 550, "icon": "💰"})
-    else:
-        missions.append({"type": "gpm", "description": "Сделать GPM > 650", "target": 650, "icon": "💎"})
-    
-    # Mission 3: Networth
-    if avg_networth < 8000:
-        missions.append({"type": "networth", "description": "Нафармить NW > 10000", "target": 10000, "icon": "💵"})
-    elif avg_networth < 12000:
-        missions.append({"type": "networth", "description": "Нафармить NW > 15000", "target": 15000, "icon": "💵"})
-    else:
-        missions.append({"type": "networth", "description": "Нафармить NW > 20000", "target": 20000, "icon": "💎"})
-    
-    # Mission 4: Healing (for supports)
-    if avg_healing < 2000:
-        missions.append({"type": "healing", "description": "Залечить > 3000 HP", "target": 3000, "icon": "💚"})
-    elif avg_healing < 5000:
-        missions.append({"type": "healing", "description": "Залечить > 6000 HP", "target": 6000, "icon": "💚"})
-    else:
-        missions.append({"type": "healing", "description": "Залечить > 10000 HP", "target": 10000, "icon": "🏥"})
-    
-    # Mission 5: Denies
-    if avg_denies < 3:
-        missions.append({"type": "denies", "description": "Заденаить ≥ 5 крипов", "target": 5, "icon": "🚫"})
-    elif avg_denies < 7:
-        missions.append({"type": "denies", "description": "Заденаить ≥ 10 крипов", "target": 10, "icon": "🚫"})
-    else:
-        missions.append({"type": "denies", "description": "Заденаить ≥ 15 крипов", "target": 15, "icon": "👑"})
-    
-    # Mission 6: Tower Damage
-    if avg_tower_damage < 2000:
-        missions.append({"type": "tower_damage", "description": "Нанести урон башням > 3000", "target": 3000, "icon": "🏰"})
-    elif avg_tower_damage < 5000:
-        missions.append({"type": "tower_damage", "description": "Нанести урон башням > 6000", "target": 6000, "icon": "🏰"})
-    else:
-        missions.append({"type": "tower_damage", "description": "Нанести урон башням > 10000", "target": 10000, "icon": "🔨"})
-    
-    return missions
-
-@app.post("/missions/generate")
-async def get_daily_missions(req: MissionRequest):
-    """Generate daily missions for player"""
-    account_id = req.account_id
-    username = req.username or f"Player_{account_id}"
-    
-    # Create player if not exists
-    player = get_player_data(account_id)
-    if not player:
-        create_player(account_id, username)
-        player = get_player_data(account_id)
-    
-    # Check if missions already generated today
-    today = datetime.now().strftime("%Y-%m-%d")
-    if player["last_mission_date"] == today:
-        # Return existing missions
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT mission_type, target_value, current_value, completed FROM missions WHERE account_id = ? AND date = ?", 
-                  (account_id, today))
-        rows = c.fetchall()
-        conn.close()
-        
-        if rows:
-            missions = []
-            for row in rows:
-                mission_type, target, current, completed = row
-                missions.append({
-                    "type": mission_type,
-                    "target": target,
-                    "current": current,
-                    "completed": bool(completed)
-                })
-            
-            return {
-                "account_id": account_id,
-                "date": today,
-                "missions": missions,
-                "player": player
-            }
-    
-    # Fetch player stats
-    try:
-        player_data = await find_player(str(account_id))
-    except:
-        raise HTTPException(status_code=404, detail="Player not found")
-    
-    # Generate new missions
-    missions = generate_missions(account_id, player_data)
-    
-    # Save to database
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Delete old missions
-    c.execute("DELETE FROM missions WHERE account_id = ? AND date = ?", (account_id, today))
-    
-    # Insert new missions
-    for mission in missions:
-        c.execute("""INSERT INTO missions (account_id, date, mission_type, target_value, xp_reward) 
-                     VALUES (?, ?, ?, ?, ?)""",
-                  (account_id, today, mission["type"], mission["target"], 25))
-    
-    # Update last mission date
-    c.execute("UPDATE players SET last_mission_date = ? WHERE account_id = ?", (today, account_id))
-    
-    conn.commit()
-    conn.close()
-    
-    return {
-        "account_id": account_id,
-        "date": today,
-        "missions": missions,
-        "player": player
-    }
-
-@app.post("/missions/check")
-async def check_mission_progress(req: MissionRequest):
-    """Check if player completed today's missions"""
-    account_id = req.account_id
-    
-    player = get_player_data(account_id)
-    if not player:
-        raise HTTPException(status_code=404, detail="Player not found")
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Get today's missions
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, mission_type, target_value, completed FROM missions WHERE account_id = ? AND date = ?", 
-              (account_id, today))
-    missions = c.fetchall()
-    conn.close()
-    
-    if not missions:
-        raise HTTPException(status_code=404, detail="No missions for today")
-    
-    # Fetch latest match
-    try:
-        recent_matches = await od_matches(account_id)
-        if not recent_matches or len(recent_matches) == 0:
-            return {"message": "No recent matches found"}
-        
-        latest_match = recent_matches[0]
-    except:
-        raise HTTPException(status_code=500, detail="Failed to fetch matches")
-    
-    # Check each mission
-    results = []
-    completed_count = 0
-    total_xp = 0
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    for mission_id, mission_type, target, is_completed in missions:
-        if is_completed:
-            results.append({"type": mission_type, "completed": True, "value": target})
-            completed_count += 1
-            continue
-        
-        completed = False
-        current_value = 0
-        
-        if mission_type == "deaths":
-            current_value = latest_match.get("deaths", 999)
-            completed = current_value <= target
-        elif mission_type == "gpm":
-            current_value = latest_match.get("gold_per_min", 0)
-            completed = current_value >= target
-        elif mission_type == "kda":
-            kills = latest_match.get("kills", 0)
-            deaths = max(latest_match.get("deaths", 1), 1)
-            assists = latest_match.get("assists", 0)
-            current_value = round((kills + assists) / deaths, 2)
-            completed = current_value >= target
-        elif mission_type == "networth":
-            current_value = latest_match.get("networth", 0)
-            completed = current_value >= target
-        elif mission_type == "healing":
-            current_value = latest_match.get("hero_healing", 0)
-            completed = current_value >= target
-        elif mission_type == "denies":
-            current_value = latest_match.get("denies", 0)
-            completed = current_value >= target
-        elif mission_type == "tower_damage":
-            current_value = latest_match.get("tower_damage", 0)
-            completed = current_value >= target
-        
-        # Update mission
-        c.execute("UPDATE missions SET current_value = ?, completed = ? WHERE id = ?",
-                  (current_value, 1 if completed else 0, mission_id))
-        
-        results.append({
-            "type": mission_type,
-            "target": target,
-            "current": current_value,
-            "completed": completed
-        })
-        
-        if completed:
-            completed_count += 1
-            total_xp += 25
-    
-    conn.commit()
-    
-    # Update player XP and streak if all missions completed
-    if completed_count == len(missions):
-        new_level = update_player_xp(account_id, total_xp)
-        c.execute("UPDATE players SET streak = streak + 1 WHERE account_id = ?", (account_id,))
-        conn.commit()
-    else:
-        new_level = player["level"]
-    
-    conn.close()
-    
-    return {
-        "account_id": account_id,
-        "missions": results,
-        "completed": completed_count,
-        "total": len(missions),
-        "xp_gained": total_xp,
-        "new_level": new_level,
-        "match_id": latest_match.get("match_id")
-    }
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
 async def tg_send(chat_id: int, text: str, reply_markup=None, parse_mode="HTML"):
@@ -1015,12 +1213,17 @@ async def telegram_webhook(req: Request):
     text    = data["message"].get("text", "").strip()
 
     if text == "/start":
+        # Create user profile
+        username = data["message"]["from"].get("username", "")
+        get_or_create_user(chat_id, username)
+        
         keyboard = None
         if WEBAPP_URL:
             keyboard = {
-                "inline_keyboard": [[
-                    {"text": "🎮 Open Analyzer", "web_app": {"url": WEBAPP_URL}}
-                ]]
+                "inline_keyboard": [
+                    [{"text": "🎮 Open Analyzer", "web_app": {"url": WEBAPP_URL}}],
+                    [{"text": "⭐ Premium (129 Stars)", "callback_data": "buy_premium"}]
+                ]
             }
         await tg_send(
             chat_id,
@@ -1030,15 +1233,106 @@ async def telegram_webhook(req: Request):
             "• Top heroes\n"
             "• Recent matches\n"
             "• Win/loss streaks\n"
-            "• KDA and GPM trends\n\n"
+            "• KDA and GPM trends\n"
+            "• 🎯 Missions & Rewards\n"
+            "• 🛒 Shop with boosters\n\n"
             "Or open the Web App 👇",
             reply_markup=keyboard,
         )
 
+    elif text == "/profile":
+        user = get_or_create_user(chat_id)
+        premium = is_premium(user)
+        premium_text = f"✅ Active until {user['premium_until'][:10]}" if premium else "❌ Not active"
+        
+        await tg_send(
+            chat_id,
+            f"👤 <b>Your Profile</b>\n\n"
+            f"💰 Coins: {user['coins']}/{'∞' if premium else '1000'}\n"
+            f"⭐ Level: {user['level']}\n"
+            f"📊 XP: {user['xp']}/{user['level'] * 1000}\n"
+            f"👑 Premium: {premium_text}\n\n"
+            f"Use /missions to see your tasks\n"
+            f"Use /shop to browse items"
+        )
+
+    elif text == "/missions":
+        user = get_or_create_user(chat_id)
+        assign_daily_missions(chat_id)
+        assign_weekly_missions(chat_id)
+        assign_monthly_missions(chat_id)
+        
+        missions = get_user_missions(chat_id)
+        if not missions:
+            await tg_send(chat_id, "No active missions. Check back later!")
+            return {"ok": True}
+        
+        msg = "🎯 <b>Your Missions</b>\n\n"
+        for m in missions:
+            status = "✅" if m["completed"] else "⏳"
+            progress = f"{m['progress']}/{m['target_value']}"
+            msg += f"{status} {m['icon']} <b>{m['title']}</b>\n"
+            msg += f"   {m['description']}\n"
+            msg += f"   Progress: {progress} | Reward: {m['reward_coins']}💰 {m['reward_xp']}⭐\n\n"
+        
+        if not is_premium(user):
+            msg += "\n💎 <b>Premium unlocks ALL missions!</b>\n/premium for details"
+        
+        await tg_send(chat_id, msg)
+
+    elif text == "/shop":
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT * FROM shop_items ORDER BY type, price LIMIT 10")
+        items = c.fetchall()
+        conn.close()
+        
+        msg = "🛒 <b>Shop</b>\n\n"
+        for item in items:
+            msg += f"{item[5]} <b>{item[1]}</b>\n"
+            msg += f"   {item[2]}\n"
+            msg += f"   Price: {item[4]}💰\n\n"
+        
+        msg += "Open Web App to purchase items!"
+        await tg_send(chat_id, msg)
+
+    elif text == "/premium":
+        user = get_or_create_user(chat_id)
+        if is_premium(user):
+            await tg_send(
+                chat_id,
+                f"✅ You already have Premium!\n"
+                f"Active until: {user['premium_until'][:10]}"
+            )
+        else:
+            keyboard = {
+                "inline_keyboard": [[
+                    {"text": "⭐ Buy Premium (129 Stars)", "callback_data": "buy_premium"}
+                ]]
+            }
+            await tg_send(
+                chat_id,
+                "💎 <b>Premium Subscription</b>\n\n"
+                "Benefits:\n"
+                "• 🎯 Access to ALL missions (daily/weekly/monthly)\n"
+                "• 💰 Unlimited coin storage\n"
+                "• 🚀 Exclusive boosters\n"
+                "• 🎁 Monthly rewards\n\n"
+                "Price: 129 Telegram Stars\n"
+                "Duration: 30 days",
+                reply_markup=keyboard
+            )
+
     elif text == "/help":
         await tg_send(
             chat_id,
-            "📖 <b>How to use:</b>\n\n"
+            "📖 <b>Commands:</b>\n\n"
+            "/start - Start bot\n"
+            "/profile - Your profile\n"
+            "/missions - View missions\n"
+            "/shop - Browse shop\n"
+            "/premium - Premium info\n\n"
+            "<b>Search:</b>\n"
             "• Send nickname: <code>Miracle-</code>\n"
             "• Or Steam32 ID: <code>105248644</code>\n"
             "• Or Steam64 ID: <code>76561198065514372</code>\n\n"
@@ -1086,14 +1380,108 @@ async def telegram_webhook(req: Request):
                     "inline_keyboard": [[
                         {
                             "text": "📊 Full Analysis",
-                            "web_app": {"url": f"{WEBAPP_URL}?player_id={account_id}"}
+                            "web_app": {"url": f"{WEBAPP_URL}?player_id={account_id}&telegram_id={chat_id}"}
                         }
                     ]]
                 }
             await tg_send(chat_id, msg, reply_markup=keyboard)
+            
+            # Link steam account and update missions
+            link_steam_account(chat_id, account_id)
+            update_mission_progress(chat_id, result)
 
         except Exception as e:
             logger.error(f"Webhook error: {e}")
             await tg_send(chat_id, "⚠️ Error loading data. Try again later.")
 
+    return {"ok": True}
+
+# ── CALLBACK QUERY HANDLER ───────────────────────────────────────────────────
+@app.post("/webhook/callback")
+async def telegram_callback(req: Request):
+    """Handle Telegram callback queries (button clicks)"""
+    data = await req.json()
+    
+    if "callback_query" not in data:
+        return {"ok": True}
+    
+    callback = data["callback_query"]
+    chat_id = callback["from"]["id"]
+    callback_data = callback.get("data", "")
+    
+    if callback_data == "buy_premium":
+        # Send invoice for Telegram Stars payment
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendInvoice"
+        invoice_payload = {
+            "chat_id": chat_id,
+            "title": "Premium Subscription",
+            "description": "30 days of Premium access with unlimited missions and coins",
+            "payload": f"premium_30d_{chat_id}",
+            "provider_token": "",  # Empty for Stars
+            "currency": "XTR",  # Telegram Stars
+            "prices": [{"label": "Premium 30 days", "amount": 129}]
+        }
+        
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, json=invoice_payload)
+    
+    # Answer callback to remove loading state
+    answer_url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+    async with httpx.AsyncClient(timeout=10) as client:
+        await client.post(answer_url, json={"callback_query_id": callback["id"]})
+    
+    return {"ok": True}
+
+# ── PAYMENT HANDLER ──────────────────────────────────────────────────────────
+@app.post("/webhook/payment")
+async def telegram_payment(req: Request):
+    """Handle successful Telegram Stars payments"""
+    data = await req.json()
+    
+    if "pre_checkout_query" in data:
+        # Approve pre-checkout
+        query_id = data["pre_checkout_query"]["id"]
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerPreCheckoutQuery"
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, json={"pre_checkout_query_id": query_id, "ok": True})
+        return {"ok": True}
+    
+    if "message" in data and "successful_payment" in data["message"]:
+        # Payment successful
+        chat_id = data["message"]["chat"]["id"]
+        payment = data["message"]["successful_payment"]
+        
+        if payment["currency"] == "XTR" and payment["total_amount"] == 129:
+            # Activate premium
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            
+            c.execute("SELECT premium_until FROM users WHERE telegram_id = ?", (chat_id,))
+            result = c.fetchone()
+            
+            if result and result[0]:
+                current_premium = datetime.fromisoformat(result[0])
+                if current_premium > datetime.now():
+                    new_premium = current_premium + timedelta(days=30)
+                else:
+                    new_premium = datetime.now() + timedelta(days=30)
+            else:
+                new_premium = datetime.now() + timedelta(days=30)
+            
+            c.execute("UPDATE users SET premium_until = ? WHERE telegram_id = ?", 
+                      (new_premium.isoformat(), chat_id))
+            conn.commit()
+            conn.close()
+            
+            await tg_send(
+                chat_id,
+                "🎉 <b>Premium Activated!</b>\n\n"
+                f"Your premium subscription is now active until {new_premium.strftime('%Y-%m-%d')}\n\n"
+                "Benefits unlocked:\n"
+                "• 🎯 All missions available\n"
+                "• 💰 Unlimited coins\n"
+                "• 🚀 Exclusive items\n\n"
+                "Use /missions to see all your tasks!"
+            )
+    
     return {"ok": True}
