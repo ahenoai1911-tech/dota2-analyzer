@@ -1220,44 +1220,54 @@ async def telegram_webhook(req: Request):
     def get_main_keyboard():
         return {
             "keyboard": [
-                ["📊 Моя статистика", "🎯 Миссии"],
-                ["🛒 Магазин", "👤 Профиль"],
-                ["⭐ Premium", "❓ Помощь"]
+                ["Моя статистика", "Миссии"],
+                ["Магазин", "Профиль"],
+                ["Premium", "Помощь"]
             ],
             "resize_keyboard": True,
             "persistent": True
         }
 
     if text == "/start":
+        # Web App button (always shown if WEBAPP_URL is set)
+        webapp_keyboard = None
+        if WEBAPP_URL:
+            webapp_keyboard = {
+                "inline_keyboard": [[
+                    {"text": "Открыть приложение", "web_app": {"url": WEBAPP_URL}}
+                ]]
+            }
+
         # Проверяем привязан ли Steam
         if not user["steam_id"]:
             await tg_send(
                 chat_id,
                 "👋 <b>Добро пожаловать в Dota 2 Analyzer!</b>\n\n"
                 "Для начала работы привяжите ваш Steam аккаунт.\n\n"
-                "📝 <b>Отправьте мне:</b>\n"
+                "<b>Отправьте мне:</b>\n"
                 "• Ваш Steam ID (например: 105248644)\n"
                 "• Или Steam64 ID (например: 76561198065514372)\n"
                 "• Или ваш никнейм в Dota 2\n\n"
-                "После привязки вы получите доступ ко всем функциям бота!"
+                "После привязки вы получите доступ ко всем функциям!",
+                reply_markup=webapp_keyboard
             )
         else:
             # Уже авторизован - показываем статистику
             await show_user_stats(chat_id, user["steam_id"])
             await tg_send(
                 chat_id,
-                "✅ Вы уже авторизованы!\n\nИспользуйте кнопки ниже для навигации 👇",
-                reply_markup=get_main_keyboard()
+                "Вы уже авторизованы!\n\nИспользуйте кнопки ниже для навигации.",
+                reply_markup=webapp_keyboard or get_main_keyboard()
             )
 
-    elif text == "📊 Моя статистика" or text == "/stats":
+    elif text == "Моя статистика" or text == "/stats":
         if not user["steam_id"]:
             await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
             return {"ok": True}
         
         await show_user_stats(chat_id, user["steam_id"])
 
-    elif text == "🎯 Миссии" or text == "/missions":
+    elif text == "Миссии" or text == "/missions":
         if not user["steam_id"]:
             await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
             return {"ok": True}
@@ -1318,7 +1328,7 @@ async def telegram_webhook(req: Request):
         
         await tg_send(chat_id, msg, reply_markup=get_main_keyboard())
 
-    elif text == "🛒 Магазин" or text == "/shop":
+    elif text == "Магазин" or text == "/shop":
         if not user["steam_id"]:
             await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
             return {"ok": True}
@@ -1365,7 +1375,7 @@ async def telegram_webhook(req: Request):
         
         await tg_send(chat_id, msg, reply_markup=keyboard)
 
-    elif text == "👤 Профиль" or text == "/profile":
+    elif text == "Профиль" or text == "/profile":
         if not user["steam_id"]:
             await tg_send(chat_id, "❌ Сначала привяжите Steam аккаунт!\nОтправьте /start")
             return {"ok": True}
@@ -1395,7 +1405,7 @@ async def telegram_webhook(req: Request):
         
         await tg_send(chat_id, msg, reply_markup=get_main_keyboard())
 
-    elif text == "⭐ Premium" or text == "/premium":
+    elif text == "Premium" or text == "/premium":
         premium = is_premium(user)
         if premium:
             await tg_send(
@@ -1427,7 +1437,7 @@ async def telegram_webhook(req: Request):
                 reply_markup=keyboard
             )
 
-    elif text == "❓ Помощь" or text == "/help":
+    elif text == "Помощь" or text == "/help":
         msg = (
             "📖 <b>Как пользоваться ботом:</b>\n\n"
             "📊 <b>Моя статистика</b> - ваша статистика в Dota 2\n"
@@ -1559,9 +1569,9 @@ async def show_user_stats(chat_id: int, steam_id: int):
         
         keyboard = {
             "keyboard": [
-                ["📊 Моя статистика", "🎯 Миссии"],
-                ["🛒 Магазин", "👤 Профиль"],
-                ["⭐ Premium", "❓ Помощь"]
+                ["Моя статистика", "Миссии"],
+                ["Магазин", "Профиль"],
+                ["Premium", "Помощь"]
             ],
             "resize_keyboard": True,
             "persistent": True
