@@ -275,6 +275,81 @@ def get_user_missions(telegram_id: int) -> list:
     rows = c.fetchall(); conn.close()
     return [dict(r) for r in rows]
 
+def update_mission_progress(telegram_id: int, player_data: dict):
+    """Обновить прогресс миссий на основе статистики игрока"""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Получить активные миссии пользователя
+    c.execute("""
+        SELECT um.id, m.requirement, m.target_value, um.progress, um.completed
+        FROM user_missions um
+        JOIN missions m ON um.mission_id = m.id
+        WHERE um.telegram_id = %s AND um.claimed = 0 AND um.completed = 0
+    """, (telegram_id,))
+
+    missions = c.fetchall()
+    stats = player_data.get("stats", {})
+    trend = player_data.get("trend", {})
+    recent = player_data.get("recent_matches", [])
+
+    for mission in missions:
+        mission_id = mission["id"]
+        requirement = mission["requirement"]
+        target = mission["target_value"]
+        current_progress = 0
+        completed = False
+
+        # Вычислить прогресс в зависимости от типа миссии
+        if requirement == "win_streak":
+            streak = trend.get("streak", {})
+            if streak.get("type") == "win":
+                current_progress = min(streak.get("count", 0), target)
+            completed = current_progress >= target
+
+        elif requirement == "gpm":
+            gpms = [m.get("gpm", 0) for m in recent[:5]]
+            current_progress = max(gpms) if gpms else 0
+            completed = current_progress >= target
+
+        elif requirement == "kda":
+            kdas = [m.get("kda", 0) for m in recent[:5]]
+            current_progress = int(max(kdas) if kdas else 0)
+            completed = current_progress >= target
+
+        elif requirement == "assists":
+            assists = [m.get("assists", 0) for m in recent[:5]]
+            current_progress = max(assists) if assists else 0
+            completed = current_progress >= target
+
+        elif requirement == "matches":
+            current_progress = len(recent)
+            completed = current_progress >= target
+
+        elif requirement == "wins":
+            wins = sum(1 for m in recent if m.get("win"))
+            current_progress = wins
+            completed = current_progress >= target
+
+        elif requirement == "winrate":
+            current_progress = int(stats.get("winrate", 0))
+            completed = current_progress >= target
+
+        elif requirement == "avg_kda":
+            current_progress = int(trend.get("last20_avg_kda", 0))
+            completed = current_progress >= target
+
+        # Обновить прогресс в БД
+        c.execute("""
+            UPDATE user_missions
+            SET progress = %s, completed = %s,
+                completed_at = CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE completed_at END
+            WHERE id = %s
+        """, (int(current_progress), 1 if completed else 0, completed, mission_id))
+
+    conn.commit()
+    conn.close()
+
 def get_shop_items() -> list:
     conn = get_db_connection(); c = conn.cursor()
     c.execute("SELECT id, name, description, type, price, icon FROM shop_items ORDER BY type, price")
@@ -893,6 +968,18 @@ async def get_missions(telegram_id: int = Query(...)):
     try:
         upsert_user(telegram_id)
         assign_user_missions(telegram_id)
+
+        # Получить Steam ID пользователя
+        user = get_user(telegram_id)
+        if user and user.get("steam_id"):
+            try:
+                # Загрузить статистику игрока
+                player_data = await _load_player(str(user["steam_id"]))
+                # Обновить прогресс миссий
+                update_mission_progress(telegram_id, player_data)
+            except Exception as e:
+                logger.warning(f"Could not update mission progress: {e}")
+
         missions = get_user_missions(telegram_id)
         return {"status": "ok", "missions": missions}
     except Exception as e:
