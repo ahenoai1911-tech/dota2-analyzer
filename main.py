@@ -1266,6 +1266,14 @@ async def telegram_webhook(req: Request):
             return {"ok": True}
         try:
             assign_user_missions(chat_id)
+
+            # Обновить прогресс миссий
+            try:
+                player_data = await _load_player(str(user["steam_id"]))
+                update_mission_progress(chat_id, player_data)
+            except Exception as e:
+                logger.warning(f"Could not update mission progress: {e}")
+
             missions = get_user_missions(chat_id)
             if not missions:
                 await tg_send(chat_id, "📭 Нет активных миссий.")
@@ -1274,9 +1282,79 @@ async def telegram_webhook(req: Request):
             for m in missions:
                 done = "✅" if m["completed"] else "⏳"
                 pct  = min(100, int(m["progress"] / max(m["target_value"], 1) * 100))
-                lines.append(f"{done} {m['icon']} <b>{m['title']}</b>\n   {m['description']}\n   Прогресс: {m['progress']}/{m['target_value']} ({pct}%)\n   Награда: 💰{m['reward_coins']} ⭐{m['reward_xp']}")
+                claim_text = f"\n   💡 Используй: <code>забрать {m['id']}</code>" if m["completed"] and not m["claimed"] else ""
+                lines.append(f"{done} {m['icon']} <b>{m['title']}</b>\n   {m['description']}\n   Прогресс: {m['progress']}/{m['target_value']} ({pct}%)\n   Награда: 💰{m['reward_coins']} ⭐{m['reward_xp']}{claim_text}")
             await tg_send(chat_id, "🎯 <b>Твои миссии</b>\n\n" + "\n\n".join(lines))
         except Exception as e:
+            await tg_send(chat_id, f"❌ Ошибка: {e}")
+
+    # ── забрать миссию ──
+    elif text.lower().startswith("забрать "):
+        parts = text.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await tg_send(chat_id, "❌ Формат: <code>забрать 1</code>")
+            return {"ok": True}
+        mission_id = int(parts[1])
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+
+            # Получить детали миссии
+            c.execute("""
+                SELECT um.id, um.completed, um.claimed, m.reward_coins, m.reward_xp, m.title
+                FROM user_missions um
+                JOIN missions m ON um.mission_id = m.id
+                WHERE um.id = %s AND um.telegram_id = %s
+            """, (mission_id, chat_id))
+
+            mission = c.fetchone()
+            if not mission:
+                conn.close()
+                await tg_send(chat_id, "❌ Миссия не найдена")
+                return {"ok": True}
+
+            if not mission["completed"]:
+                conn.close()
+                await tg_send(chat_id, "❌ Миссия еще не выполнена")
+                return {"ok": True}
+
+            if mission["claimed"]:
+                conn.close()
+                await tg_send(chat_id, "❌ Награда уже получена")
+                return {"ok": True}
+
+            # Отметить как полученную
+            c.execute("UPDATE user_missions SET claimed = 1 WHERE id = %s", (mission_id,))
+
+            # Начислить награды
+            c.execute("""
+                UPDATE users
+                SET coins = coins + %s, xp = xp + %s
+                WHERE telegram_id = %s
+            """, (mission["reward_coins"], mission["reward_xp"], chat_id))
+
+            # Записать транзакцию
+            c.execute("""
+                INSERT INTO transactions (telegram_id, type, amount, description)
+                VALUES (%s, 'earn', %s, %s)
+            """, (chat_id, mission["reward_coins"], f"Миссия: {mission['title']}"))
+
+            conn.commit()
+
+            # Получить обновленный баланс
+            c.execute("SELECT coins, xp, level FROM users WHERE telegram_id = %s", (chat_id,))
+            user = c.fetchone()
+
+            conn.close()
+
+            await tg_send(chat_id,
+                f"🎉 <b>Награда получена!</b>\n\n"
+                f"💰 +{mission['reward_coins']} монет\n"
+                f"⭐ +{mission['reward_xp']} XP\n\n"
+                f"Баланс: 💰{user['coins']} | ⭐ Уровень {user['level']}"
+            )
+        except Exception as e:
+            logger.error(f"Claim mission error: {e}")
             await tg_send(chat_id, f"❌ Ошибка: {e}")
 
     # ── /shop ──
