@@ -74,6 +74,8 @@ def init_db():
             xp INTEGER DEFAULT 0,
             level INTEGER DEFAULT 1,
             premium_until TIMESTAMP,
+            ai_requests_used INTEGER DEFAULT 0,
+            ai_requests_reset_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -188,23 +190,23 @@ def init_db():
     count = c.fetchone()
     if count and count['count'] == 0:
         shop_items = [
+            # Premium подписка
+            ("Premium подписка", "30 дней Premium: 3 миссии в день + 100 AI запросов", "premium", 129, "⭐", "days:30"),
+
             # Boosters
             ("XP Booster x2", "Удваивает получаемый опыт на 24 часа", "booster_xp", 500, "⚡", "duration:24,multiplier:2"),
-            ("XP Booster x3", "Утраивает получаемый опыт на 12 часов", "booster_xp", 800, "⚡⚡", "duration:12,multiplier:3"),
             ("Coin Booster x2", "Удваивает награды монет на 24 часа", "booster_coins", 600, "💰", "duration:24,multiplier:2"),
             ("Mega Booster", "x2 XP и монеты на 48 часов", "booster_mega", 1500, "🚀", "duration:48,xp:2,coins:2"),
-            
+
             # Cosmetics
             ("Золотая рамка", "Золотая рамка для профиля", "cosmetic_frame", 300, "🖼️", "color:gold"),
             ("Алмазная рамка", "Алмазная рамка для профиля", "cosmetic_frame", 800, "💎", "color:diamond"),
-            ("Титул: Новичок", "Отображается в профиле", "cosmetic_title", 200, "🏷️", "title:Новичок"),
             ("Титул: Ветеран", "Отображается в профиле", "cosmetic_title", 500, "🎖️", "title:Ветеран"),
             ("Титул: Легенда", "Отображается в профиле", "cosmetic_title", 1000, "👑", "title:Легенда"),
-            
+
             # Special
-            ("Дополнительная миссия", "Открывает 1 дополнительную миссию на день", "special_mission", 400, "📋", "missions:1"),
+            ("AI Запросы +10", "10 дополнительных AI запросов", "special_ai", 250, "🤖", "queries:10"),
             ("Сброс миссий", "Обновляет все текущие миссии", "special_refresh", 300, "🔄", "refresh:all"),
-            ("AI Запросы x10", "10 дополнительных AI запросов", "special_ai", 250, "🤖", "queries:10"),
         ]
         c.executemany("""
             INSERT INTO shop_items (name, description, type, price, icon, data)
@@ -246,6 +248,89 @@ def unlink_steam(telegram_id: int):
     c.execute("UPDATE users SET steam_id = NULL WHERE telegram_id = %s", (telegram_id,))
     conn.commit(); conn.close()
 
+def is_premium(telegram_id: int) -> bool:
+    """Проверить премиум статус пользователя"""
+    user = get_user(telegram_id)
+    if not user or not user.get('premium_until'):
+        return False
+    from datetime import datetime
+    premium_until = user['premium_until']
+    if isinstance(premium_until, str):
+        premium_until = datetime.fromisoformat(premium_until)
+    return premium_until > datetime.now()
+
+def check_ai_limit(telegram_id: int) -> dict:
+    """Проверить лимит AI запросов"""
+    from datetime import datetime, timedelta
+    user = get_user(telegram_id)
+    if not user:
+        return {"allowed": False, "remaining": 0, "limit": 0}
+
+    premium = is_premium(telegram_id)
+    limit = 100 if premium else 5
+
+    # Сбросить счетчик если прошел день
+    reset_at = user.get('ai_requests_reset_at')
+    if reset_at:
+        if isinstance(reset_at, str):
+            reset_at = datetime.fromisoformat(reset_at)
+        if datetime.now() - reset_at > timedelta(days=1):
+            conn = get_db_connection(); c = conn.cursor()
+            c.execute("""
+                UPDATE users
+                SET ai_requests_used = 0, ai_requests_reset_at = CURRENT_TIMESTAMP
+                WHERE telegram_id = %s
+            """, (telegram_id,))
+            conn.commit(); conn.close()
+            user['ai_requests_used'] = 0
+
+    used = user.get('ai_requests_used', 0)
+    remaining = max(0, limit - used)
+
+    return {
+        "allowed": remaining > 0,
+        "remaining": remaining,
+        "limit": limit,
+        "premium": premium
+    }
+
+def increment_ai_usage(telegram_id: int):
+    """Увеличить счетчик AI запросов"""
+    conn = get_db_connection(); c = conn.cursor()
+    c.execute("""
+        UPDATE users
+        SET ai_requests_used = ai_requests_used + 1
+        WHERE telegram_id = %s
+    """, (telegram_id,))
+    conn.commit(); conn.close()
+
+def activate_premium(telegram_id: int, days: int = 30):
+    """Активировать премиум подписку"""
+    from datetime import datetime, timedelta
+    conn = get_db_connection(); c = conn.cursor()
+
+    # Получить текущий premium_until
+    user = get_user(telegram_id)
+    if user and user.get('premium_until'):
+        premium_until = user['premium_until']
+        if isinstance(premium_until, str):
+            premium_until = datetime.fromisoformat(premium_until)
+        # Если премиум еще активен, продлить от текущей даты окончания
+        if premium_until > datetime.now():
+            new_until = premium_until + timedelta(days=days)
+        else:
+            new_until = datetime.now() + timedelta(days=days)
+    else:
+        new_until = datetime.now() + timedelta(days=days)
+
+    c.execute("""
+        UPDATE users
+        SET premium_until = %s
+        WHERE telegram_id = %s
+    """, (new_until, telegram_id))
+    conn.commit(); conn.close()
+    return new_until
+
 def assign_user_missions(telegram_id: int):
     """Назначить миссии если ещё не назначены сегодня"""
     conn = get_db_connection(); c = conn.cursor()
@@ -256,7 +341,12 @@ def assign_user_missions(telegram_id: int):
     count = c.fetchone()
     if count and count['count'] > 0:
         conn.close(); return
-    c.execute("SELECT id FROM missions WHERE type = 'daily' ORDER BY RANDOM() LIMIT 3")
+
+    # Премиум = 3 миссии, бесплатно = 1 миссия
+    premium = is_premium(telegram_id)
+    limit = 3 if premium else 1
+
+    c.execute(f"SELECT id FROM missions WHERE type = 'daily' ORDER BY RANDOM() LIMIT {limit}")
     mission_ids = [r['id'] for r in c.fetchall()]
     for mid in mission_ids:
         c.execute("INSERT INTO user_missions (telegram_id, mission_id) VALUES (%s, %s)", (telegram_id, mid))
@@ -358,21 +448,65 @@ def get_shop_items() -> list:
 
 def buy_item(telegram_id: int, item_id: int) -> dict:
     conn = get_db_connection(); c = conn.cursor()
-    c.execute("SELECT name, price FROM shop_items WHERE id = %s", (item_id,))
+    c.execute("SELECT name, price, type, data FROM shop_items WHERE id = %s", (item_id,))
     item = c.fetchone()
     if not item:
         conn.close(); raise Exception("Предмет не найден")
+
     c.execute("SELECT coins FROM users WHERE telegram_id = %s", (telegram_id,))
     user = c.fetchone()
     if not user:
         conn.close(); raise Exception("Пользователь не найден")
+
     if user["coins"] < item["price"]:
         conn.close(); raise Exception(f"Недостаточно монет. Нужно: {item['price']}, есть: {user['coins']}")
+
+    # Обработка покупки Premium
+    if item["type"] == "premium":
+        days = 30  # По умолчанию 30 дней
+        if item.get("data"):
+            parts = dict(p.split(':') for p in item["data"].split(','))
+            days = int(parts.get('days', 30))
+
+        from datetime import datetime, timedelta
+        user_data = get_user(telegram_id)
+        if user_data and user_data.get('premium_until'):
+            premium_until = user_data['premium_until']
+            if isinstance(premium_until, str):
+                premium_until = datetime.fromisoformat(premium_until)
+            if premium_until > datetime.now():
+                new_until = premium_until + timedelta(days=days)
+            else:
+                new_until = datetime.now() + timedelta(days=days)
+        else:
+            new_until = datetime.now() + timedelta(days=days)
+
+        c.execute("UPDATE users SET premium_until = %s WHERE telegram_id = %s", (new_until, telegram_id))
+
+    # Обработка AI запросов
+    elif item["type"] == "special_ai":
+        if item.get("data"):
+            parts = dict(p.split(':') for p in item["data"].split(','))
+            queries = int(parts.get('queries', 10))
+            # Уменьшить использованные запросы (добавить лимит)
+            c.execute("""
+                UPDATE users
+                SET ai_requests_used = GREATEST(0, ai_requests_used - %s)
+                WHERE telegram_id = %s
+            """, (queries, telegram_id))
+
+    # Списать монеты
     new_coins = user["coins"] - item["price"]
     c.execute("UPDATE users SET coins = %s WHERE telegram_id = %s", (new_coins, telegram_id))
-    c.execute("INSERT INTO user_inventory (telegram_id, item_id) VALUES (%s, %s)", (telegram_id, item_id))
+
+    # Добавить в инвентарь (кроме Premium и AI запросов)
+    if item["type"] not in ["premium", "special_ai"]:
+        c.execute("INSERT INTO user_inventory (telegram_id, item_id) VALUES (%s, %s)", (telegram_id, item_id))
+
+    # Записать транзакцию
     c.execute("INSERT INTO transactions (telegram_id, type, amount, description) VALUES (%s, 'spend', %s, %s)",
               (telegram_id, item["price"], f"Купил: {item['name']}"))
+
     conn.commit(); conn.close()
     return {"item_name": item["name"], "coins_left": new_coins}
 
@@ -818,6 +952,7 @@ class AIRequest(BaseModel):
     message: str
     player_context: str = ""
     history: list = []
+    telegram_id: int = None
 
 class RoastRequest(BaseModel):
     player_context: str
@@ -828,7 +963,18 @@ async def ai_chat(req: AIRequest):
     if not GROQ_API_KEY:
         logger.error("GROQ_API_KEY is not set!")
         raise HTTPException(status_code=503, detail="AI not configured. Set GROQ_API_KEY in Railway.")
-    
+
+    # Проверить лимит AI запросов
+    telegram_id = req.telegram_id if hasattr(req, 'telegram_id') else None
+    if telegram_id:
+        limit_check = check_ai_limit(telegram_id)
+        if not limit_check["allowed"]:
+            premium = limit_check["premium"]
+            if premium:
+                raise HTTPException(status_code=429, detail=f"Лимит AI запросов исчерпан. Осталось: 0/{limit_check['limit']}")
+            else:
+                raise HTTPException(status_code=429, detail=f"Лимит бесплатных AI запросов исчерпан (5/день). Купите Premium за 129⭐ для 100 запросов в день!")
+
     logger.info(f"GROQ_API_KEY is set: {GROQ_API_KEY[:10]}...")
 
     system = """You are an expert Dota 2 coach and analyst.
@@ -846,7 +992,7 @@ Keep responses under 300 words."""
 
     try:
         logger.info(f"AI request: message={req.message[:50]}... history_len={len(req.history)}")
-        
+
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -861,9 +1007,9 @@ Keep responses under 300 words."""
                     "temperature": 0.7,
                 }
             )
-        
+
         logger.info(f"Groq response status: {r.status_code}")
-        
+
         if r.status_code != 200:
             error_text = r.text
             logger.error(f"Groq error: {r.status_code} {error_text}")
@@ -872,7 +1018,17 @@ Keep responses under 300 words."""
         data = r.json()
         text = data["choices"][0]["message"]["content"]
         logger.info(f"AI response length: {len(text)}")
-        return {"reply": text}
+
+        # Увеличить счетчик использования
+        if telegram_id:
+            increment_ai_usage(telegram_id)
+            limit_check = check_ai_limit(telegram_id)
+
+        return {
+            "reply": text,
+            "ai_remaining": limit_check["remaining"] if telegram_id else None,
+            "ai_limit": limit_check["limit"] if telegram_id else None
+        }
 
     except HTTPException:
         raise
@@ -1102,6 +1258,55 @@ async def buy_shop_item(req: Request):
     except Exception as e:
         logger.error(f"Buy item error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/premium/buy")
+async def buy_premium(req: Request):
+    """Купить Premium подписку"""
+    data = await req.json()
+    telegram_id = data.get("telegram_id")
+
+    if not telegram_id:
+        raise HTTPException(status_code=400, detail="Missing telegram_id")
+
+    try:
+        # Активировать премиум на 30 дней
+        premium_until = activate_premium(telegram_id, days=30)
+
+        return {
+            "status": "ok",
+            "message": "Premium активирован!",
+            "premium_until": premium_until.isoformat(),
+            "features": {
+                "missions": 3,
+                "ai_requests": 100
+            }
+        }
+    except Exception as e:
+        logger.error(f"Buy premium error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/premium/status")
+async def get_premium_status(telegram_id: int = Query(...)):
+    """Проверить статус Premium"""
+    try:
+        premium = is_premium(telegram_id)
+        ai_limit = check_ai_limit(telegram_id)
+        user = get_user(telegram_id)
+
+        return {
+            "status": "ok",
+            "premium": premium,
+            "premium_until": user.get('premium_until').isoformat() if user and user.get('premium_until') else None,
+            "ai_requests": {
+                "used": user.get('ai_requests_used', 0) if user else 0,
+                "limit": ai_limit["limit"],
+                "remaining": ai_limit["remaining"]
+            },
+            "missions_limit": 3 if premium else 1
+        }
+    except Exception as e:
+        logger.error(f"Get premium status error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # в”Ђв”Ђ TELEGRAM в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 async def tg_send(chat_id: int, text: str, reply_markup=None, parse_mode="HTML"):
