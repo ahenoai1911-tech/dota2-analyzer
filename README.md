@@ -1,72 +1,169 @@
-﻿# Dota 2 Analyzer - Telegram Bot + WebApp
+# 🎮 Dota 2 Analyzer - Исправленная версия
 
-Полнофункциональный бот для анализа игроков Dota 2 с системой миссий, магазином и AI анализом.
+Полнофункциональное веб-приложение для анализа статистики Dota 2 с системой миссий, магазином и AI ассистентом.
+
+## ✅ Что исправлено (2026-04-10)
+
+### Backend (main.py):
+- ✅ Исправлены баги в функции `assign_user_missions`
+- ✅ Добавлены рабочие эндпоинты для миссий и магазина
+- ✅ Удалены нерабочие функции
+- ✅ Исправлена работа с PostgreSQL
+
+### Frontend (index.html):
+- ✅ Улучшенные анимации для карточек миссий
+- ✅ Hover эффекты для магазина
+- ✅ Анимированные прогресс-бары с shimmer эффектом
+- ✅ Улучшенные кнопки с тенями и transitions
 
 ## 🚀 Быстрый старт
 
-### 1. Создать PostgreSQL на Railway
-\\\
-Railway Dashboard → + New → Database → PostgreSQL
-\\\
+```bash
+# 1. Установить зависимости
+pip install fastapi uvicorn psycopg2-binary httpx
 
-### 2. Установить переменные окружения
-\\\
-DATABASE_URL = (автоматически от Railway)
-BOT_TOKEN = ваш_токен_telegram_бота
-WEBAPP_URL = https://your-site.com/index.html
-STRATZ_TOKEN = ваш_stratz_токен (опционально)
-GROQ_API_KEY = ваш_groq_токен
-\\\
+# 2. Настроить .env или экспортировать переменные
+export DATABASE_URL="postgresql://user:pass@host:5432/dbname"
+export BOT_TOKEN="your_telegram_bot_token"
+export GROQ_API_KEY="your_groq_api_key"
 
-### 3. Деплой backend
-\\\ash
-git add main.py requirements.txt
-git commit -m "Deploy to Railway"
-git push
-\\\
+# 3. Запустить сервер
+python main.py
+```
 
-### 4. Деплой frontend (index.html)
-Загрузить на:
-- GitHub Pages (рекомендуется)
-- Vercel
-- Netlify
+Сервер запустится на http://localhost:8000
 
-### 5. Тест
-Отправить Steam ID боту → Нажать кнопку "📊 Полный анализ"
+## 📋 Основные функции
 
-## 📂 Структура
+### 🔍 Поиск и анализ игроков
+- Поиск по нику или Steam ID
+- Детальная статистика (WR, KDA, GPM, XPM)
+- Топ герои с винрейтом
+- История последних 20 матчей
+- Тренды и серии побед/поражений
 
-- **main.py** - Backend (FastAPI + PostgreSQL)
-- **index.html** - Frontend (WebApp)
-- **requirements.txt** - Зависимости Python
+### 🎯 Система миссий
+- Ежедневные, недельные и месячные миссии
+- Автоматическое назначение 3 daily миссий
+- Прогресс трекинг
+- Награды: монеты и XP
 
-## ✨ Функционал
+### 🛒 Магазин
+- Бустеры XP и монет
+- Косметические предметы (рамки, титулы)
+- Специальные предметы
+- Система инвентаря
 
-- ✅ Поиск игроков (Stratz + OpenDota)
-- ✅ Приветственный баннер (раз в день)
-- ✅ Система миссий (daily/weekly/monthly)
-- ✅ Магазин (бустеры, косметика)
-- ✅ Профиль с уровнями и опытом
-- ✅ AI анализ игры
-- ✅ Premium подписка
+### 🤖 AI Ассистент
+- Анализ игры и советы
+- Прогноз MMR
+- Рекомендации по героям
+- Поиск слабых мест
 
-## 💾 База данных
+## 📊 API Endpoints
 
-PostgreSQL таблицы:
-- users
-- missions
-- user_missions
-- shop_items
-- user_inventory
-- transactions
+### Основные
+- `GET /player?query=XXX` - поиск игрока
+- `GET /search?q=XXX` - поиск по нику
+- `POST /ai` - AI чат
+- `POST /roast` - AI роаст
 
-## 📝 Требования
+### Миссии
+- `GET /missions?telegram_id=XXX` - получить миссии
+- `POST /missions/claim` - забрать награду
 
-- Python 3.9+
-- PostgreSQL
+### Магазин
+- `GET /shop` - список товаров
+- `POST /shop/buy` - купить товар
+
+### Пользователь
+- `GET /user/profile?telegram_id=XXX` - профиль
+
+## 🗄️ База данных
+
+PostgreSQL с таблицами:
+- `users` - пользователи
+- `missions` - шаблоны миссий
+- `user_missions` - прогресс по миссиям
+- `shop_items` - товары
+- `user_inventory` - инвентарь
+- `transactions` - история транзакций
+
+База инициализируется автоматически при первом запуске.
+
+## 🎨 UI Features
+
+- Темная тема в стиле Telegram
+- Плавные анимации и transitions
+- Адаптивный дизайн
+- Shimmer эффекты на прогресс-барах
+- Hover эффекты с подъемом карточек
+- Градиентные кнопки с тенями
+
+## 📁 Файлы
+
+- `main.py` - Backend сервер (FastAPI)
+- `index.html` - Frontend приложение
+- `FIXES.md` - Описание исправлений
+- `CHANGELOG.md` - Полный changelog
+- `*.backup` - Резервные копии
+
+## 🔧 Требования
+
+- Python 3.10+
+- PostgreSQL 12+
 - Telegram Bot Token
 - Groq API Key (для AI)
+- Stratz Token (опционально)
 
-## 🎯 Готово!
+## 📝 Переменные окружения
 
-Всё настроено и готово к использованию! 🚀
+```bash
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+BOT_TOKEN=your_telegram_bot_token
+GROQ_API_KEY=your_groq_api_key
+STRATZ_TOKEN=your_stratz_token  # опционально
+WEBAPP_URL=https://your-webapp-url.com
+PORT=8000  # опционально
+```
+
+## 🎯 Типы миссий
+
+**Daily:** 5 типов (50-100💰, 100-150 XP)
+**Weekly:** 5 типов (180-400💰, 300-600 XP)
+**Monthly:** 5 типов (800-1500💰, 1500-3000 XP)
+
+## 🛒 Товары
+
+**Бустеры:** 500-1500💰
+**Косметика:** 200-1000💰
+**Специальное:** 250-400💰
+
+## 🚀 Деплой
+
+Готово к деплою на:
+- Railway
+- Heroku
+- Render
+- DigitalOcean
+- AWS/GCP/Azure
+
+## 📞 Поддержка
+
+Все основные функции протестированы и работают:
+- ✅ Поиск игроков
+- ✅ Статистика
+- ✅ AI ассистент
+- ✅ Миссии
+- ✅ Магазин
+- ✅ Telegram бот
+
+## 📄 Лицензия
+
+MIT
+
+---
+
+**Версия:** 2.1.0 (исправленная)
+**Дата:** 2026-04-10
+**Статус:** ✅ Готово к использованию
