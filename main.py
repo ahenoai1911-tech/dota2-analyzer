@@ -250,14 +250,14 @@ def assign_user_missions(telegram_id: int):
     """Назначить миссии если ещё не назначены сегодня"""
     conn = get_db_connection(); c = conn.cursor()
     c.execute("""
-        SELECT COUNT(*) FROM user_missions
+        SELECT COUNT(*) as count FROM user_missions
         WHERE telegram_id = %s AND DATE(assigned_at) = CURRENT_DATE
     """, (telegram_id,))
     count = c.fetchone()
-    if count and count[0] > 0:
+    if count and count['count'] > 0:
         conn.close(); return
     c.execute("SELECT id FROM missions WHERE type = 'daily' ORDER BY RANDOM() LIMIT 3")
-    mission_ids = [r[0] for r in c.fetchall()]
+    mission_ids = [r['id'] for r in c.fetchall()]
     for mid in mission_ids:
         c.execute("INSERT INTO user_missions (telegram_id, mission_id) VALUES (%s, %s)", (telegram_id, mid))
     conn.commit(); conn.close()
