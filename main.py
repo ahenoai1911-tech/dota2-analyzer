@@ -151,7 +151,18 @@ def init_db():
         )
     """)
     
-    # Add unique index on shop_items name to prevent duplicates
+    # Remove duplicate shop items (keep only the row with the lowest id per name)
+    c.execute("""
+        DELETE FROM shop_items
+        WHERE id NOT IN (
+            SELECT MIN(id) FROM shop_items GROUP BY name
+        )
+    """)
+    conn.commit()
+
+    # Recreate unique index cleanly
+    c.execute("DROP INDEX IF EXISTS shop_items_name_unique")
+    conn.commit()
     c.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS shop_items_name_unique ON shop_items(name)
     """)
