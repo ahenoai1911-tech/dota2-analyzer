@@ -103,8 +103,8 @@ def init_db():
             telegram_id BIGINT NOT NULL,
             mission_id INTEGER NOT NULL,
             progress INTEGER DEFAULT 0,
-            completed INTEGER DEFAULT 0,
-            claimed INTEGER DEFAULT 0,
+            completed BOOLEAN DEFAULT FALSE,
+            claimed BOOLEAN DEFAULT FALSE,
             assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             completed_at TIMESTAMP,
             FOREIGN KEY (telegram_id) REFERENCES users(telegram_id),
@@ -151,6 +151,11 @@ def init_db():
         )
     """)
     
+    # Add unique index on shop_items name to prevent duplicates
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS shop_items_name_unique ON shop_items(name)
+    """)
+    
     conn.commit()
     
     # Insert default missions if empty
@@ -191,7 +196,7 @@ def init_db():
     if count and count['count'] == 0:
         shop_items = [
             # Premium подписка
-            ("Premium подписка", "30 дней Premium: 3 миссии в день + 100 AI запросов", "premium", 129, "⭐", "days:30"),
+            ("Premium 30 дней", "30 дней Premium: 3 миссии в день + 100 AI запросов", "premium", 129, "⭐", "days:30"),
 
             # Boosters
             ("XP Booster x2", "Удваивает получаемый опыт на 24 часа", "booster_xp", 500, "⚡", "duration:24,multiplier:2"),
@@ -211,6 +216,7 @@ def init_db():
         c.executemany("""
             INSERT INTO shop_items (name, description, type, price, icon, data)
             VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (name) DO NOTHING
         """, shop_items)
         conn.commit()
     
@@ -359,7 +365,7 @@ def get_user_missions(telegram_id: int) -> list:
                m.target_value, m.reward_coins, m.reward_xp,
                um.progress, um.completed, um.claimed
         FROM user_missions um JOIN missions m ON um.mission_id = m.id
-        WHERE um.telegram_id = %s AND um.claimed = 0
+        WHERE um.telegram_id = %s AND um.claimed = FALSE
         ORDER BY um.completed, m.type
     """, (telegram_id,))
     rows = c.fetchall(); conn.close()
@@ -375,7 +381,7 @@ def update_mission_progress(telegram_id: int, player_data: dict):
         SELECT um.id, m.requirement, m.target_value, um.progress, um.completed
         FROM user_missions um
         JOIN missions m ON um.mission_id = m.id
-        WHERE um.telegram_id = %s AND um.claimed = 0 AND um.completed = 0
+        WHERE um.telegram_id = %s AND um.claimed = FALSE AND um.completed = FALSE
     """, (telegram_id,))
 
     missions = c.fetchall()
@@ -435,7 +441,7 @@ def update_mission_progress(telegram_id: int, player_data: dict):
             SET progress = %s, completed = %s,
                 completed_at = CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE completed_at END
             WHERE id = %s
-        """, (int(current_progress), 1 if completed else 0, completed, mission_id))
+        """, (int(current_progress), True if completed else False, completed, mission_id))
 
     conn.commit()
     conn.close()
@@ -1178,7 +1184,7 @@ async def claim_mission(req: Request):
             raise HTTPException(status_code=400, detail="Mission already claimed")
 
         # Mark as claimed
-        c.execute("UPDATE user_missions SET claimed = 1 WHERE id = %s", (mission_id,))
+        c.execute("UPDATE user_missions SET claimed = TRUE WHERE id = %s", (mission_id,))
 
         # Give rewards
         c.execute("""
@@ -1529,7 +1535,7 @@ async def telegram_webhook(req: Request):
                 return {"ok": True}
 
             # Отметить как полученную
-            c.execute("UPDATE user_missions SET claimed = 1 WHERE id = %s", (mission_id,))
+            c.execute("UPDATE user_missions SET claimed = TRUE WHERE id = %s", (mission_id,))
 
             # Начислить награды
             c.execute("""
