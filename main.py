@@ -149,78 +149,69 @@ def init_db():
         )
     """)
     
-            # === INSERT DEFAULT MISSIONS IF EMPTY ===
-    try:
-        c.execute("SELECT COUNT(*) FROM missions")
-        count = c.fetchone()
-        mission_count = count[0] if count else 0
-    except Exception:
-        mission_count = 0
-
-    if mission_count == 0:
-        print("Добавляем стандартные миссии...")
+    conn.commit()
+    
+    # Insert default missions if empty
+    c.execute("SELECT COUNT(*) FROM missions")
+    count = c.fetchone()
+    if count and count[0] == 0:
         default_missions = [
+            # Daily missions
             ("daily", "Первая кровь", "Получи First Blood в любом матче", "first_blood", 1, 50, 100, "🩸"),
             ("daily", "Победная серия", "Выиграй 3 игры подряд", "win_streak", 3, 100, 150, "🔥"),
             ("daily", "Мастер фарма", "Набери 600+ GPM в матче", "gpm", 600, 75, 120, "💰"),
             ("daily", "Безупречная игра", "Сыграй матч с KDA 10+", "kda", 10, 80, 130, "⭐"),
             ("daily", "Командный игрок", "Сделай 20+ ассистов в матче", "assists", 20, 60, 100, "🤝"),
-
+            
+            # Weekly missions
             ("weekly", "Марафонец", "Сыграй 20 матчей за неделю", "matches", 20, 300, 500, "🏃"),
             ("weekly", "Универсал", "Сыграй на 10 разных героях", "unique_heroes", 10, 250, 400, "🎭"),
             ("weekly", "Доминатор", "Выиграй 15 игр за неделю", "wins", 15, 400, 600, "👑"),
             ("weekly", "Разрушитель", "Нанеси 1M урона по строениям", "tower_damage", 1000000, 200, 350, "🏰"),
             ("weekly", "Целитель", "Вылечи 50K HP союзникам", "healing", 50000, 180, 300, "💚"),
-
+            
+            # Monthly missions
             ("monthly", "Легенда", "Выиграй 50 игр за месяц", "wins", 50, 1000, 2000, "🏆"),
             ("monthly", "Мастер героя", "Сыграй 30 игр на одном герое", "hero_matches", 30, 800, 1500, "🦸"),
             ("monthly", "Несокрушимый", "Достигни винрейта 60%+", "winrate", 60, 1200, 2500, "💎"),
             ("monthly", "Профессионал", "Набери средний KDA 4.0+", "avg_kda", 4, 900, 1800, "🎯"),
             ("monthly", "Богатей", "Накопи 10000 монет", "total_coins", 10000, 1500, 3000, "💸"),
         ]
-
         c.executemany("""
-            INSERT INTO missions 
-            (type, title, description, requirement, target_value, reward_coins, reward_xp, icon)
+            INSERT INTO missions (type, title, description, requirement, target_value, reward_coins, reward_xp, icon)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, default_missions)
         conn.commit()
-
-
-    # === INSERT SHOP ITEMS IF EMPTY ===
-    try:
-        c.execute("SELECT COUNT(*) FROM shop_items")
-        count = c.fetchone()
-        shop_count = count[0] if count else 0
-    except Exception:
-        shop_count = 0
-
-    if shop_count == 0:
-        print("Добавляем товары в магазин...")
+    
+    # Insert shop items if empty
+    c.execute("SELECT COUNT(*) FROM shop_items")
+    count = c.fetchone()
+    if count and count[0] == 0:
         shop_items = [
+            # Boosters
             ("XP Booster x2", "Удваивает получаемый опыт на 24 часа", "booster_xp", 500, "⚡", "duration:24,multiplier:2"),
             ("XP Booster x3", "Утраивает получаемый опыт на 12 часов", "booster_xp", 800, "⚡⚡", "duration:12,multiplier:3"),
             ("Coin Booster x2", "Удваивает награды монет на 24 часа", "booster_coins", 600, "💰", "duration:24,multiplier:2"),
             ("Mega Booster", "x2 XP и монеты на 48 часов", "booster_mega", 1500, "🚀", "duration:48,xp:2,coins:2"),
-
+            
+            # Cosmetics
             ("Золотая рамка", "Золотая рамка для профиля", "cosmetic_frame", 300, "🖼️", "color:gold"),
             ("Алмазная рамка", "Алмазная рамка для профиля", "cosmetic_frame", 800, "💎", "color:diamond"),
             ("Титул: Новичок", "Отображается в профиле", "cosmetic_title", 200, "🏷️", "title:Новичок"),
             ("Титул: Ветеран", "Отображается в профиле", "cosmetic_title", 500, "🎖️", "title:Ветеран"),
             ("Титул: Легенда", "Отображается в профиле", "cosmetic_title", 1000, "👑", "title:Легенда"),
-
+            
+            # Special
             ("Дополнительная миссия", "Открывает 1 дополнительную миссию на день", "special_mission", 400, "📋", "missions:1"),
             ("Сброс миссий", "Обновляет все текущие миссии", "special_refresh", 300, "🔄", "refresh:all"),
             ("AI Запросы x10", "10 дополнительных AI запросов", "special_ai", 250, "🤖", "queries:10"),
         ]
-
         c.executemany("""
-            INSERT INTO shop_items 
-            (name, description, type, price, icon, data)
+            INSERT INTO shop_items (name, description, type, price, icon, data)
             VALUES (%s, %s, %s, %s, %s, %s)
         """, shop_items)
         conn.commit()
-
+    
     conn.close()
 
 # Initialize database on startup
@@ -260,9 +251,10 @@ def assign_user_missions(telegram_id: int):
     conn = get_db_connection(); c = conn.cursor()
     c.execute("""
         SELECT COUNT(*) FROM user_missions
-        WHERE telegram_id = %s AND DATE(assigned_at) = CURRENT_DATE AND claimed = 0
+        WHERE telegram_id = %s AND DATE(assigned_at) = CURRENT_DATE
     """, (telegram_id,))
-    if c.fetchone()[0] > 0:
+    count = c.fetchone()
+    if count and count[0] > 0:
         conn.close(); return
     c.execute("SELECT id FROM missions WHERE type = 'daily' ORDER BY RANDOM() LIMIT 3")
     mission_ids = [r[0] for r in c.fetchall()]
@@ -894,263 +886,135 @@ Example style:
         raise HTTPException(status_code=500, detail=str(e))
 
 # в”Ђв”Ђ MISSIONS ENDPOINTS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-class MissionRequest(BaseModel):
-    account_id: int
-    username: str = ""
-
-def generate_missions(account_id: int, player_stats: dict) -> list:
-    """Generate personalized missions based on player weaknesses"""
-    stats = player_stats.get("stats", {})
-    trend = player_stats.get("trend", {})
-    recent = player_stats.get("recent_matches", [])
-    
-    missions = []
-    
-    # Analyze weaknesses
-    avg_deaths = sum(m.get("deaths", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_gpm = sum(m.get("gpm", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_kda = trend.get("last20_avg_kda", 0)
-    avg_networth = sum(m.get("networth", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_healing = sum(m.get("healing", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_denies = sum(m.get("denies", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    avg_tower_damage = sum(m.get("tower_damage", 0) for m in recent[:10]) / max(len(recent[:10]), 1)
-    
-    # Mission 1: Deaths
-    if avg_deaths > 7:
-        missions.append({"type": "deaths", "description": "РЈРјРµСЂРµС‚СЊ в‰¤ 5 СЂР°Р·", "target": 5, "icon": "рџ’Ђ"})
-    elif avg_deaths > 5:
-        missions.append({"type": "deaths", "description": "РЈРјРµСЂРµС‚СЊ в‰¤ 3 СЂР°Р·Р°", "target": 3, "icon": "рџ’Ђ"})
-    else:
-        missions.append({"type": "deaths", "description": "РЎС‹РіСЂР°С‚СЊ Р±РµР· СЃРјРµСЂС‚РµР№", "target": 0, "icon": "рџ›ЎпёЏ"})
-    
-    # Mission 2: GPM
-    if avg_gpm < 400:
-        missions.append({"type": "gpm", "description": "РЎРґРµР»Р°С‚СЊ GPM > 450", "target": 450, "icon": "рџ’°"})
-    elif avg_gpm < 500:
-        missions.append({"type": "gpm", "description": "РЎРґРµР»Р°С‚СЊ GPM > 550", "target": 550, "icon": "рџ’°"})
-    else:
-        missions.append({"type": "gpm", "description": "РЎРґРµР»Р°С‚СЊ GPM > 650", "target": 650, "icon": "рџ’Ћ"})
-    
-    # Mission 3: Networth
-    if avg_networth < 8000:
-        missions.append({"type": "networth", "description": "РќР°С„Р°СЂРјРёС‚СЊ NW > 10000", "target": 10000, "icon": "рџ’µ"})
-    elif avg_networth < 12000:
-        missions.append({"type": "networth", "description": "РќР°С„Р°СЂРјРёС‚СЊ NW > 15000", "target": 15000, "icon": "рџ’µ"})
-    else:
-        missions.append({"type": "networth", "description": "РќР°С„Р°СЂРјРёС‚СЊ NW > 20000", "target": 20000, "icon": "рџ’Ћ"})
-    
-    # Mission 4: Healing (for supports)
-    if avg_healing < 2000:
-        missions.append({"type": "healing", "description": "Р—Р°Р»РµС‡РёС‚СЊ > 3000 HP", "target": 3000, "icon": "рџ’љ"})
-    elif avg_healing < 5000:
-        missions.append({"type": "healing", "description": "Р—Р°Р»РµС‡РёС‚СЊ > 6000 HP", "target": 6000, "icon": "рџ’љ"})
-    else:
-        missions.append({"type": "healing", "description": "Р—Р°Р»РµС‡РёС‚СЊ > 10000 HP", "target": 10000, "icon": "рџЏҐ"})
-    
-    # Mission 5: Denies
-    if avg_denies < 3:
-        missions.append({"type": "denies", "description": "Р—Р°РґРµРЅР°РёС‚СЊ в‰Ґ 5 РєСЂРёРїРѕРІ", "target": 5, "icon": "рџљ«"})
-    elif avg_denies < 7:
-        missions.append({"type": "denies", "description": "Р—Р°РґРµРЅР°РёС‚СЊ в‰Ґ 10 РєСЂРёРїРѕРІ", "target": 10, "icon": "рџљ«"})
-    else:
-        missions.append({"type": "denies", "description": "Р—Р°РґРµРЅР°РёС‚СЊ в‰Ґ 15 РєСЂРёРїРѕРІ", "target": 15, "icon": "рџ‘‘"})
-    
-    # Mission 6: Tower Damage
-    if avg_tower_damage < 2000:
-        missions.append({"type": "tower_damage", "description": "РќР°РЅРµСЃС‚Рё СѓСЂРѕРЅ Р±Р°С€РЅСЏРј > 3000", "target": 3000, "icon": "рџЏ°"})
-    elif avg_tower_damage < 5000:
-        missions.append({"type": "tower_damage", "description": "РќР°РЅРµСЃС‚Рё СѓСЂРѕРЅ Р±Р°С€РЅСЏРј > 6000", "target": 6000, "icon": "рџЏ°"})
-    else:
-        missions.append({"type": "tower_damage", "description": "РќР°РЅРµСЃС‚Рё СѓСЂРѕРЅ Р±Р°С€РЅСЏРј > 10000", "target": 10000, "icon": "рџ”Ё"})
-    
-    return missions
-
-@app.post("/missions/generate")
-async def get_daily_missions(req: MissionRequest):
-    """Generate daily missions for player"""
-    account_id = req.account_id
-    username = req.username or f"Player_{account_id}"
-    
-    # Create player if not exists
-    player = get_player_data(account_id)
-    if not player:
-        create_player(account_id, username)
-        player = get_player_data(account_id)
-    
-    # Check if missions already generated today
-    today = datetime.now().strftime("%Y-%m-%d")
-    if player["last_mission_date"] == today:
-        # Return existing missions
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT mission_type, target_value, current_value, completed FROM missions WHERE account_id = %s AND date = %s", 
-                  (account_id, today))
-        rows = c.fetchall()
-        conn.close()
-        
-        if rows:
-            missions = []
-            for row in rows:
-                mission_type, target, current, completed = row
-                missions.append({
-                    "type": mission_type,
-                    "target": target,
-                    "current": current,
-                    "completed": bool(completed)
-                })
-            
-            return {
-                "account_id": account_id,
-                "date": today,
-                "missions": missions,
-                "player": player
-            }
-    
-    # Fetch player stats
+# ── MISSIONS ENDPOINTS ──────────────────────────────────────────────────────────
+@app.get("/missions")
+async def get_missions(telegram_id: int = Query(...)):
+    """Get user missions"""
     try:
-        player_data = await find_player(str(account_id))
-    except:
-        raise HTTPException(status_code=404, detail="Player not found")
-    
-    # Generate new missions
-    missions = generate_missions(account_id, player_data)
-    
-    # Save to database
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    # Delete old missions
-    c.execute("DELETE FROM missions WHERE account_id = %s AND date = %s", (account_id, today))
-    
-    # Insert new missions
-    for mission in missions:
-        c.execute("""INSERT INTO missions (account_id, date, mission_type, target_value, xp_reward) 
-                     VALUES (?, ?, ?, ?, ?)""",
-                  (account_id, today, mission["type"], mission["target"], 25))
-    
-    # Update last mission date
-    c.execute("UPDATE players SET last_mission_date = %s WHERE account_id = %s", (today, account_id))
-    
-    conn.commit()
-    conn.close()
-    
-    return {
-        "account_id": account_id,
-        "date": today,
-        "missions": missions,
-        "player": player
-    }
+        upsert_user(telegram_id)
+        assign_user_missions(telegram_id)
+        missions = get_user_missions(telegram_id)
+        return {"status": "ok", "missions": missions}
+    except Exception as e:
+        logger.error(f"Get missions error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/missions/check")
-async def check_mission_progress(req: MissionRequest):
-    """Check if player completed today's missions"""
-    account_id = req.account_id
-    
-    player = get_player_data(account_id)
-    if not player:
-        raise HTTPException(status_code=404, detail="Player not found")
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Get today's missions
+@app.post("/missions/claim")
+async def claim_mission(req: Request):
+    """Claim mission reward"""
+    data = await req.json()
+    telegram_id = data.get("telegram_id")
+    mission_id = data.get("mission_id")
+
+    if not telegram_id or not mission_id:
+        raise HTTPException(status_code=400, detail="Missing telegram_id or mission_id")
+
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT id, mission_type, target_value, completed FROM missions WHERE account_id = %s AND date = %s", 
-              (account_id, today))
-    missions = c.fetchall()
-    conn.close()
-    
-    if not missions:
-        raise HTTPException(status_code=404, detail="No missions for today")
-    
-    # Fetch latest match
+
     try:
-        recent_matches = await od_matches(account_id)
-        if not recent_matches or len(recent_matches) == 0:
-            return {"message": "No recent matches found"}
-        
-        latest_match = recent_matches[0]
-    except:
-        raise HTTPException(status_code=500, detail="Failed to fetch matches")
-    
-    # Check each mission
-    results = []
-    completed_count = 0
-    total_xp = 0
-    
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    for mission_id, mission_type, target, is_completed in missions:
-        if is_completed:
-            results.append({"type": mission_type, "completed": True, "value": target})
-            completed_count += 1
-            continue
-        
-        completed = False
-        current_value = 0
-        
-        if mission_type == "deaths":
-            current_value = latest_match.get("deaths", 999)
-            completed = current_value <= target
-        elif mission_type == "gpm":
-            current_value = latest_match.get("gold_per_min", 0)
-            completed = current_value >= target
-        elif mission_type == "kda":
-            kills = latest_match.get("kills", 0)
-            deaths = max(latest_match.get("deaths", 1), 1)
-            assists = latest_match.get("assists", 0)
-            current_value = round((kills + assists) / deaths, 2)
-            completed = current_value >= target
-        elif mission_type == "networth":
-            current_value = latest_match.get("networth", 0)
-            completed = current_value >= target
-        elif mission_type == "healing":
-            current_value = latest_match.get("hero_healing", 0)
-            completed = current_value >= target
-        elif mission_type == "denies":
-            current_value = latest_match.get("denies", 0)
-            completed = current_value >= target
-        elif mission_type == "tower_damage":
-            current_value = latest_match.get("tower_damage", 0)
-            completed = current_value >= target
-        
-        # Update mission
-        c.execute("UPDATE missions SET current_value = %s, completed = %s WHERE id = %s",
-                  (current_value, 1 if completed else 0, mission_id))
-        
-        results.append({
-            "type": mission_type,
-            "target": target,
-            "current": current_value,
-            "completed": completed
-        })
-        
-        if completed:
-            completed_count += 1
-            total_xp += 25
-    
-    conn.commit()
-    
-    # Update player XP and streak if all missions completed
-    if completed_count == len(missions):
-        new_level = update_player_xp(account_id, total_xp)
-        c.execute("UPDATE players SET streak = streak + 1 WHERE account_id = %s", (account_id,))
+        # Get mission details
+        c.execute("""
+            SELECT um.id, um.completed, um.claimed, m.reward_coins, m.reward_xp, m.title
+            FROM user_missions um
+            JOIN missions m ON um.mission_id = m.id
+            WHERE um.id = %s AND um.telegram_id = %s
+        """, (mission_id, telegram_id))
+
+        mission = c.fetchone()
+        if not mission:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Mission not found")
+
+        if not mission["completed"]:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Mission not completed")
+
+        if mission["claimed"]:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Mission already claimed")
+
+        # Mark as claimed
+        c.execute("UPDATE user_missions SET claimed = 1 WHERE id = %s", (mission_id,))
+
+        # Give rewards
+        c.execute("""
+            UPDATE users
+            SET coins = coins + %s, xp = xp + %s
+            WHERE telegram_id = %s
+        """, (mission["reward_coins"], mission["reward_xp"], telegram_id))
+
+        # Log transaction
+        c.execute("""
+            INSERT INTO transactions (telegram_id, type, amount, description)
+            VALUES (%s, 'earn', %s, %s)
+        """, (telegram_id, mission["reward_coins"], f"Миссия: {mission['title']}"))
+
         conn.commit()
-    else:
-        new_level = player["level"]
-    
-    conn.close()
-    
-    return {
-        "account_id": account_id,
-        "missions": results,
-        "completed": completed_count,
-        "total": len(missions),
-        "xp_gained": total_xp,
-        "new_level": new_level,
-        "match_id": latest_match.get("match_id")
-    }
+
+        # Get updated user
+        c.execute("SELECT coins, xp, level FROM users WHERE telegram_id = %s", (telegram_id,))
+        user = c.fetchone()
+
+        conn.close()
+
+        return {
+            "status": "ok",
+            "reward": {
+                "coins": mission["reward_coins"],
+                "xp": mission["reward_xp"]
+            },
+            "user": dict(user) if user else None
+        }
+    except HTTPException:
+        conn.close()
+        raise
+    except Exception as e:
+        conn.close()
+        logger.error(f"Claim mission error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/user/profile")
+async def get_user_profile(telegram_id: int = Query(...)):
+    """Get user profile"""
+    try:
+        upsert_user(telegram_id)
+        user = get_user(telegram_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {"status": "ok", "user": user}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get profile error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/shop")
+async def get_shop():
+    """Get shop items"""
+    try:
+        items = get_shop_items()
+        return {"status": "ok", "items": items}
+    except Exception as e:
+        logger.error(f"Get shop error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/shop/buy")
+async def buy_shop_item(req: Request):
+    """Buy item from shop"""
+    data = await req.json()
+    telegram_id = data.get("telegram_id")
+    item_id = data.get("item_id")
+
+    if not telegram_id or not item_id:
+        raise HTTPException(status_code=400, detail="Missing telegram_id or item_id")
+
+    try:
+        result = buy_item(telegram_id, item_id)
+        return {"status": "ok", **result}
+    except Exception as e:
+        logger.error(f"Buy item error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 # в”Ђв”Ђ TELEGRAM в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 async def tg_send(chat_id: int, text: str, reply_markup=None, parse_mode="HTML"):
