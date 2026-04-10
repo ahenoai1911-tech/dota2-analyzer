@@ -392,7 +392,7 @@ def update_mission_progress(telegram_id: int, player_data: dict):
         SELECT um.id, m.requirement, m.target_value, um.progress, um.completed
         FROM user_missions um
         JOIN missions m ON um.mission_id = m.id
-        WHERE um.telegram_id = %s AND um.claimed = FALSE AND um.completed = FALSE
+        WHERE um.telegram_id = %s AND um.claimed = FALSE
     """, (telegram_id,))
 
     missions = c.fetchall()
@@ -1175,7 +1175,8 @@ async def claim_mission(req: Request):
     try:
         # Get mission details
         c.execute("""
-            SELECT um.id, um.completed, um.claimed, m.reward_coins, m.reward_xp, m.title
+            SELECT um.id, um.completed, um.claimed, um.progress,
+                   m.reward_coins, m.reward_xp, m.title, m.target_value
             FROM user_missions um
             JOIN missions m ON um.mission_id = m.id
             WHERE um.id = %s AND um.telegram_id = %s
@@ -1186,13 +1187,19 @@ async def claim_mission(req: Request):
             conn.close()
             raise HTTPException(status_code=404, detail="Mission not found")
 
-        if not mission["completed"]:
-            conn.close()
-            raise HTTPException(status_code=400, detail="Mission not completed")
-
         if mission["claimed"]:
             conn.close()
             raise HTTPException(status_code=400, detail="Mission already claimed")
+
+        # Проверить completed — либо флаг TRUE, либо прогресс достиг цели
+        is_completed = bool(mission["completed"]) or (mission["progress"] >= mission["target_value"])
+        if not is_completed:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Mission not completed")
+
+        # Если флаг не был выставлен — исправить в БД
+        if not bool(mission["completed"]):
+            c.execute("UPDATE user_missions SET completed = TRUE, completed_at = CURRENT_TIMESTAMP WHERE id = %s", (mission_id,))
 
         # Mark as claimed
         c.execute("UPDATE user_missions SET claimed = TRUE WHERE id = %s", (mission_id,))
