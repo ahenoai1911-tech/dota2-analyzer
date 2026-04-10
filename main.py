@@ -149,12 +149,16 @@ def init_db():
         )
     """)
     
-    conn.commit()
-    
-    # Insert default missions if empty
-    c.execute("SELECT COUNT(*) FROM missions")
-    count = c.fetchone()
-    if count and count[0] == 0:
+        # Insert default missions if empty
+    try:
+        c.execute("SELECT COUNT(*) FROM missions")
+        count = c.fetchone()
+        mission_count = count[0] if count else 0
+    except Exception:
+        mission_count = 0  # таблица не существует или другая ошибка
+
+    if mission_count == 0:
+        print("Добавляем стандартные миссии...")
         default_missions = [
             # Daily missions
             ("daily", "Первая кровь", "Получи First Blood в любом матче", "first_blood", 1, 50, 100, "🩸"),
@@ -162,14 +166,14 @@ def init_db():
             ("daily", "Мастер фарма", "Набери 600+ GPM в матче", "gpm", 600, 75, 120, "💰"),
             ("daily", "Безупречная игра", "Сыграй матч с KDA 10+", "kda", 10, 80, 130, "⭐"),
             ("daily", "Командный игрок", "Сделай 20+ ассистов в матче", "assists", 20, 60, 100, "🤝"),
-            
+           
             # Weekly missions
             ("weekly", "Марафонец", "Сыграй 20 матчей за неделю", "matches", 20, 300, 500, "🏃"),
             ("weekly", "Универсал", "Сыграй на 10 разных героях", "unique_heroes", 10, 250, 400, "🎭"),
             ("weekly", "Доминатор", "Выиграй 15 игр за неделю", "wins", 15, 400, 600, "👑"),
             ("weekly", "Разрушитель", "Нанеси 1M урона по строениям", "tower_damage", 1000000, 200, 350, "🏰"),
             ("weekly", "Целитель", "Вылечи 50K HP союзникам", "healing", 50000, 180, 300, "💚"),
-            
+           
             # Monthly missions
             ("monthly", "Легенда", "Выиграй 50 игр за месяц", "wins", 50, 1000, 2000, "🏆"),
             ("monthly", "Мастер героя", "Сыграй 30 игр на одном герое", "hero_matches", 30, 800, 1500, "🦸"),
@@ -179,28 +183,34 @@ def init_db():
         ]
         c.executemany("""
             INSERT INTO missions (type, title, description, requirement, target_value, reward_coins, reward_xp, icon)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, default_missions)
         conn.commit()
-    
+
     # Insert shop items if empty
-    c.execute("SELECT COUNT(*) FROM shop_items")
-    count = c.fetchone()
-    if count and count[0] == 0:
+    try:
+        c.execute("SELECT COUNT(*) FROM shop_items")
+        count = c.fetchone()
+        shop_count = count[0] if count else 0
+    except Exception:
+        shop_count = 0
+
+    if shop_count == 0:
+        print("Добавляем товары в магазин...")
         shop_items = [
             # Boosters
             ("XP Booster x2", "Удваивает получаемый опыт на 24 часа", "booster_xp", 500, "⚡", "duration:24,multiplier:2"),
             ("XP Booster x3", "Утраивает получаемый опыт на 12 часов", "booster_xp", 800, "⚡⚡", "duration:12,multiplier:3"),
             ("Coin Booster x2", "Удваивает награды монет на 24 часа", "booster_coins", 600, "💰", "duration:24,multiplier:2"),
             ("Mega Booster", "x2 XP и монеты на 48 часов", "booster_mega", 1500, "🚀", "duration:48,xp:2,coins:2"),
-            
+           
             # Cosmetics
             ("Золотая рамка", "Золотая рамка для профиля", "cosmetic_frame", 300, "🖼️", "color:gold"),
             ("Алмазная рамка", "Алмазная рамка для профиля", "cosmetic_frame", 800, "💎", "color:diamond"),
             ("Титул: Новичок", "Отображается в профиле", "cosmetic_title", 200, "🏷️", "title:Новичок"),
             ("Титул: Ветеран", "Отображается в профиле", "cosmetic_title", 500, "🎖️", "title:Ветеран"),
             ("Титул: Легенда", "Отображается в профиле", "cosmetic_title", 1000, "👑", "title:Легенда"),
-            
+           
             # Special
             ("Дополнительная миссия", "Открывает 1 дополнительную миссию на день", "special_mission", 400, "📋", "missions:1"),
             ("Сброс миссий", "Обновляет все текущие миссии", "special_refresh", 300, "🔄", "refresh:all"),
@@ -208,10 +218,10 @@ def init_db():
         ]
         c.executemany("""
             INSERT INTO shop_items (name, description, type, price, icon, data)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, shop_items)
         conn.commit()
-    
+
     conn.close()
 
 # Initialize database on startup
