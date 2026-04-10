@@ -119,8 +119,14 @@ def init_db():
                 AND data_type='integer'
             ) THEN
                 ALTER TABLE user_missions
-                    ALTER COLUMN completed TYPE BOOLEAN USING completed::boolean,
-                    ALTER COLUMN claimed   TYPE BOOLEAN USING claimed::boolean;
+                    ALTER COLUMN completed DROP DEFAULT,
+                    ALTER COLUMN claimed   DROP DEFAULT;
+                ALTER TABLE user_missions
+                    ALTER COLUMN completed TYPE BOOLEAN USING (completed::int::boolean),
+                    ALTER COLUMN claimed   TYPE BOOLEAN USING (claimed::int::boolean);
+                ALTER TABLE user_missions
+                    ALTER COLUMN completed SET DEFAULT FALSE,
+                    ALTER COLUMN claimed   SET DEFAULT FALSE;
             END IF;
         END$$;
     """)
